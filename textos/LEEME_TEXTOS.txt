@@ -1,0 +1,5 @@
+Coloca aquí tus 20 archivos de texto con extensión .txt (por ejemplo: texto_01.txt, texto_02.txt ... texto_20.txt).
+
+En cada ciclo y para cada grupo, la herramienta seleccionará de forma 100% aleatoria uno de estos 20 textos y lo enviará junto con la imagen fija como pie de foto (caption).
+
+Nota: Puedes nombrarlos como prefieras, siempre que tengan la extensión .txt.

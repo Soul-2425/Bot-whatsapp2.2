@@ -1,0 +1,7 @@
+Coloca en esta carpeta la imagen fija que deseas difundir en los grupos.
+Formatos soportados:
+- .png
+- .jpg
+- .jpeg
+
+El bot tomará automáticamente la imagen que coloques aquí y la enviará junto con un texto aleatorio como pie de foto (caption).
