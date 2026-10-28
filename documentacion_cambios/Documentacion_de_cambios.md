@@ -4,6 +4,15 @@ Todas las modificaciones, optimizaciones y versiones notables de este proyecto e
 
 ---
 
+## [Versión 1.1.0] - 2026-10-28
+
+### Incorporación de Utilidades de Mantenimiento (`Actualizar.bat`, `Borrar_Cache.bat`, `Borrar_Sesion.bat`)
+- **Actualización Automática (`Actualizar.bat`):** Script para sincronizar con un solo clic el repositorio desde GitHub (`git pull`), verificar dependencias (`npm install`) y reinstalar automáticamente los parches de `whatsapp-web.js`.
+- **Limpieza de Estado y Ciclos (`Borrar_Cache.bat`):** Permite reiniciar los contadores de ciclos (`cache/estado.json`) y la memoria caché interna de WhatsApp Web sin afectar la sesión vinculada.
+- **Gestión de Cierre de Sesión (`Borrar_Sesion.bat`):** Facilita la desvinculación completa de la cuenta y regeneración del código QR eliminando la carpeta persistente `Seccion/`.
+
+---
+
 ## [Versión 1.0.9] - 2026-10-27
 
 ### Rotación y Selección Aleatoria de Múltiples Imágenes por Grupo

@@ -27,8 +27,11 @@ herramienta-whats2/
 │   └── Documentacion_de_cambios.md
 │
 ├── grupos.txt                   # Archivo de grupos (formato: [ID] | [Nombre])
-├── Extractor.bat                # Acceso rápido para extraer los grupos
 ├── Iniciar.bat                  # Acceso rápido para iniciar los ciclos de difusión
+├── Extractor.bat                # Acceso rápido para extraer los grupos
+├── Actualizar.bat               # Descarga cambios de Git, npm install y restaura parches
+├── Borrar_Cache.bat             # Limpia cache/estado.json y temporales para reiniciar ciclos
+├── Borrar_Sesion.bat            # Elimina la sesión de WhatsApp para escanear un nuevo QR
 ├── package.json                 # Dependencias y scripts de Node
 └── README.md                    # Esta guía
 ```
@@ -66,6 +69,11 @@ herramienta-whats2/
    - Total de grupos omitidos (solo administradores).
 6. **Espera entre Ciclos:** Entre ciclo y ciclo, el sistema espera **2 horas (7,200,000 ms)** informando periódicamente el tiempo restante en pantalla.
 7. Al completar los 8 ciclos, el sistema se cierra de forma ordenada y segura.
+
+### 4. Herramientas de Mantenimiento Rápido
+- **`Actualizar.bat`:** Conéctate con un solo clic a GitHub, descarga la versión más reciente del código, actualiza librerías con `npm install` y reinstala automáticamente los parches críticos de `whatsapp-web.js`.
+- **`Borrar_Cache.bat`:** Limpia los registros de ciclos previos (`cache/estado.json`) y datos temporales para que puedas iniciar desde el **Ciclo 1** con un contador limpio sin afectar tu cuenta ni tu sesión.
+- **`Borrar_Sesion.bat`:** Desvincula la cuenta de WhatsApp de la computadora borrando la carpeta `Seccion/`. Úsalo cuando quieras cambiar de número o forzar un nuevo código QR.
 
 ---
 
