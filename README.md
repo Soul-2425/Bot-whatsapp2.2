@@ -47,9 +47,9 @@ herramienta-whats2/
 4. El proceso finalizará automáticamente.
 5. Puedes abrir `grupos.txt` y editarlo: eliminar grupos a los que no deseas enviar, reordenarlos, etc. La herramienta respetará estrictamente el orden de las líneas y soporta sin problemas listas de más de 120 grupos.
 
-### 2. Configurar Imagen y Textos
-- **Imagen fija:** Coloca tu imagen (formato `.jpg`, `.jpeg` o `.png`) dentro de la carpeta `img/`.
-- **Textos:** Coloca tus 20 archivos de texto con extensión `.txt` dentro de la carpeta `textos/`. En cada envío, el sistema elegirá al azar uno de estos 20 textos como pie de foto (*caption*) de la imagen.
+### 2. Configurar Imágenes y Textos
+- **Imágenes (rotación aleatoria):** Coloca una o más imágenes (formato `.jpg`, `.jpeg` o `.png`) dentro de la carpeta `img/`. Para cada grupo, el bot seleccionará al azar una de las imágenes disponibles en la carpeta y le aplicará un hash de archivo único para evitar detecciones de spam.
+- **Textos:** Coloca tus archivos de texto con extensión `.txt` dentro de la carpeta `textos/`. En cada envío, el sistema elegirá al azar uno de estos textos como pie de foto (*caption*) de la imagen.
 
 ### 3. Iniciar Difusión Masiva (`Iniciar.bat`)
 1. Haz doble clic en `Iniciar.bat` (o ejecuta `node Envio/Arranque/index.js`).

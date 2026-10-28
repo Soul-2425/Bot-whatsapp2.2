@@ -81,19 +81,42 @@ function cargarGrupos() {
 }
 
 /**
- * Busca y carga la imagen fija (JPG, JPEG o PNG) desde la carpeta img/
+ * Busca y carga todas las imágenes (JPG, JPEG o PNG) disponibles en la carpeta img/
+ * @returns {Array<string>} Lista de rutas absolutas de las imágenes encontradas
+ */
+function cargarImagenes() {
+    asegurarDirectorios();
+    const archivos = fs.readdirSync(IMG_DIR);
+    const imagenes = archivos
+        .filter(file => /\.(png|jpe?g)$/i.test(file))
+        .map(file => path.join(IMG_DIR, file));
+
+    if (imagenes.length === 0) {
+        throw new Error(`No se encontró ninguna imagen (.jpg, .jpeg o .png) en la carpeta img/. Por favor coloca al menos una imagen a difundir.`);
+    }
+
+    return imagenes;
+}
+
+/**
+ * Selecciona una imagen aleatoria de la lista disponible
+ * @param {Array<string>} imagenes Lista de rutas de imágenes
+ * @returns {string} Ruta de la imagen seleccionada al azar
+ */
+function obtenerImagenAleatoria(imagenes) {
+    if (!imagenes || imagenes.length === 0) {
+        throw new Error('No hay imágenes disponibles para seleccionar.');
+    }
+    return imagenes[Math.floor(Math.random() * imagenes.length)];
+}
+
+/**
+ * Obtiene una imagen aleatoria (por retrocompatibilidad si es llamada externamente)
  * @returns {string} Ruta absoluta del archivo de imagen
  */
 function obtenerRutaImagen() {
-    asegurarDirectorios();
-    const archivos = fs.readdirSync(IMG_DIR);
-    const imagen = archivos.find(file => /\.(png|jpe?g)$/i.test(file));
-
-    if (!imagen) {
-        throw new Error(`No se encontró ninguna imagen (.jpg, .jpeg o .png) en la carpeta img/. Por favor coloca la imagen a difundir.`);
-    }
-
-    return path.join(IMG_DIR, imagen);
+    const imagenes = cargarImagenes();
+    return obtenerImagenAleatoria(imagenes);
 }
 
 /**
@@ -272,12 +295,12 @@ async function verificarPermisoGrupoLigero(client, groupId, myWid) {
  * 1. Liberar la memoria y vaciar la caché de WhatsApp Web (WAWebMediaInMemoryBlobCache y GC).
  * 2. Preparar el contenido del siguiente grupo (generar imagen con hash SHA-256 fresco y texto aleatorio).
  * 3. Precalentar metadatos en segundo plano sin colgar el navegador.
- * @returns {Promise<{proximoTexto: string|null, proximaMedia: MessageMedia|null}>}
+ * @returns {Promise<{proximoTexto: string|null, proximaMedia: MessageMedia|null, proximoNombreImagen: string|null}>}
  */
 async function pausaInterGrupoConPreparacion({
     client,
     siguienteGrupo,
-    rutaImagen,
+    imagenes,
     textos,
     ciclo,
     siguienteIndice,
@@ -314,11 +337,14 @@ async function pausaInterGrupoConPreparacion({
 
     let proximoTexto = null;
     let proximaMedia = null;
+    let proximoNombreImagen = null;
 
-    // 2. Preparar anticipadamente texto, imagen fresca y precalentar modelo del siguiente grupo
+    // 2. Preparar anticipadamente texto, imagen fresca (aleatoria) y precalentar modelo del siguiente grupo
     if (siguienteGrupo) {
         proximoTexto = textos[Math.floor(Math.random() * textos.length)];
-        proximaMedia = crearMediaParaEnvio(rutaImagen, `${ciclo}_${siguienteIndice}`);
+        const imgSeleccionada = obtenerImagenAleatoria(imagenes);
+        proximoNombreImagen = path.basename(imgSeleccionada);
+        proximaMedia = crearMediaParaEnvio(imgSeleccionada, `${ciclo}_${siguienteIndice}`);
 
         try {
             await client.pupPage.evaluate(async (id) => {
@@ -346,7 +372,7 @@ async function pausaInterGrupoConPreparacion({
         await sleep(tiempoRestante);
     }
 
-    return { proximoTexto, proximaMedia };
+    return { proximoTexto, proximaMedia, proximoNombreImagen };
 }
 
 /**
@@ -413,10 +439,9 @@ async function ejecutarCiclos(client) {
         throw new Error('El archivo grupos.txt está vacío. Agrega grupos o ejecuta Extractor.bat.');
     }
 
-    // 2. Cargar imagen fija
-    const rutaImagen = obtenerRutaImagen();
-    console.log(`[${getTimestamp()}] [ARCHIVOS] Imagen fija cargada: ${path.basename(rutaImagen)}`);
-    const media = MessageMedia.fromFilePath(rutaImagen);
+    // 2. Cargar imágenes disponibles para rotación aleatoria
+    const imagenes = cargarImagenes();
+    console.log(`[${getTimestamp()}] [ARCHIVOS] Imágenes cargadas: ${imagenes.length} imagen(es) encontradas en img/ (${imagenes.map(img => path.basename(img)).join(', ')}).`);
 
     // 3. Cargar textos
     const textos = cargarTextos();
@@ -450,7 +475,9 @@ async function ejecutarCiclos(client) {
 
         // Preparar anticipadamente el primer grupo del ciclo
         let textoActual = textos[Math.floor(Math.random() * textos.length)];
-        let mediaActual = crearMediaParaEnvio(rutaImagen, `${ciclo}_0`);
+        let imgActual = obtenerImagenAleatoria(imagenes);
+        let nombreImagenActual = path.basename(imgActual);
+        let mediaActual = crearMediaParaEnvio(imgActual, `${ciclo}_0`);
         try {
             await client.pupPage.evaluate(async (id) => {
                 try {
@@ -493,7 +520,7 @@ async function ejecutarCiclos(client) {
                         const prep = await pausaInterGrupoConPreparacion({
                             client,
                             siguienteGrupo,
-                            rutaImagen,
+                            imagenes,
                             textos,
                             ciclo,
                             siguienteIndice: i + 1,
@@ -502,6 +529,7 @@ async function ejecutarCiclos(client) {
                         });
                         textoActual = prep.proximoTexto;
                         mediaActual = prep.proximaMedia;
+                        nombreImagenActual = prep.proximoNombreImagen;
                     }
 
                     // Descanso especial anti-baneos o de lote cada 25 grupos
@@ -514,7 +542,9 @@ async function ejecutarCiclos(client) {
                     textoActual = textos[Math.floor(Math.random() * textos.length)];
                 }
                 if (!mediaActual) {
-                    mediaActual = crearMediaParaEnvio(rutaImagen, `${ciclo}_${i}`);
+                    const imgRandom = obtenerImagenAleatoria(imagenes);
+                    nombreImagenActual = path.basename(imgRandom);
+                    mediaActual = crearMediaParaEnvio(imgRandom, `${ciclo}_${i}`);
                 }
 
                 // 3. Simular presencia humana ("escribiendo...") por 1 segundo antes de enviar
@@ -532,7 +562,7 @@ async function ejecutarCiclos(client) {
                 } catch (eType) {}
 
                 // 4. Informar estado previo de envío
-                console.log(`[${getTimestamp()}] [ENVIANDO] Transmitiendo imagen y texto aleatorio...`);
+                console.log(`[${getTimestamp()}] [ENVIANDO] Transmitiendo imagen (${nombreImagenActual}) y texto aleatorio...`);
 
                 // 5. Enviar mensaje multimedia con timeout de 45s y reintento resiliente si el contexto de página se restablece
                 let enviadoExitoso = false;
@@ -562,18 +592,19 @@ async function ejecutarCiclos(client) {
                 await sleep(1500);
 
                 contadorEnviados++;
-                console.log(`[${getTimestamp()}] [ENVIADO] Mensaje e imagen entregados con éxito.`);
+                console.log(`[${getTimestamp()}] [ENVIADO] Mensaje e imagen (${nombreImagenActual}) entregados con éxito.`);
 
                 // Liberar referencia del buffer enviado para liberar memoria
                 mediaActual = null;
                 textoActual = null;
+                nombreImagenActual = null;
 
                 // 6. Pausa de seguridad optimizada (8 a 13 segundos) con liberación de caché y preparación del siguiente grupo
                 if (siguienteGrupo) {
                     const prep = await pausaInterGrupoConPreparacion({
                         client,
                         siguienteGrupo,
-                        rutaImagen,
+                        imagenes,
                         textos,
                         ciclo,
                         siguienteIndice: i + 1,
@@ -582,6 +613,7 @@ async function ejecutarCiclos(client) {
                     });
                     textoActual = prep.proximoTexto;
                     mediaActual = prep.proximaMedia;
+                    nombreImagenActual = prep.proximoNombreImagen;
                 }
                 console.log(`\n======================================================`);
                 console.log(`\n======================================================\n`);
@@ -604,13 +636,14 @@ async function ejecutarCiclos(client) {
 
                 mediaActual = null;
                 textoActual = null;
+                nombreImagenActual = null;
 
                 // Si hay siguiente grupo, mantener SIEMPRE la pausa de seguridad (8 a 13s) para no disparar ráfagas
                 if (siguienteGrupo) {
                     const prep = await pausaInterGrupoConPreparacion({
                         client,
                         siguienteGrupo,
-                        rutaImagen,
+                        imagenes,
                         textos,
                         ciclo,
                         siguienteIndice: i + 1,
@@ -619,6 +652,7 @@ async function ejecutarCiclos(client) {
                     });
                     textoActual = prep.proximoTexto;
                     mediaActual = prep.proximaMedia;
+                    nombreImagenActual = prep.proximoNombreImagen;
                 }
 
                 // Descanso especial anti-baneos o de lote cada 25 grupos si coincidió con fallo
@@ -679,6 +713,8 @@ module.exports = {
     cargarGrupos,
     cargarTextos,
     obtenerRutaImagen,
+    cargarImagenes,
+    obtenerImagenAleatoria,
     guardarEstado,
     cargarEstado
 };

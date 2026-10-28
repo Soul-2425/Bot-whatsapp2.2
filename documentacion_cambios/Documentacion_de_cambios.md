@@ -4,6 +4,18 @@ Todas las modificaciones, optimizaciones y versiones notables de este proyecto e
 
 ---
 
+## [Versión 1.0.9] - 2026-10-27
+
+### Rotación y Selección Aleatoria de Múltiples Imágenes por Grupo
+- **Selección dinámica de imágenes (`cargarImagenes` / `obtenerImagenAleatoria`):** En lugar de cargar una sola imagen estática para todos los grupos y ciclos, el sistema escanea dinámicamente la carpeta `img/` y elige al azar una imagen (.png, .jpg, .jpeg) para cada grupo individual.
+- **Doble capa de variabilidad visual y técnica:** 
+  1. Variación del archivo origen (rotación entre `img.jpg`, `img2.jpg`, etc.).
+  2. Modificación de hash SHA-256 única mediante bytes agregados al buffer en cada envío (`crearMediaParaEnvio`).
+- **Información detallada en consola:** Cada intento de envío reporta el nombre del archivo de imagen seleccionado (ej. `[ENVIANDO] Transmitiendo imagen (img2.jpg) y texto aleatorio...`).
+- **Integración con preparación anticipada:** La función `pausaInterGrupoConPreparacion` ahora preselecciona y precalienta tanto el texto como la imagen aleatoria del siguiente grupo durante la pausa de seguridad.
+
+---
+
 ## [Versión 1.0.8] - 2026-10-23
 
 ### Pausa Inter-Grupo con Liberación de Caché, Preparación Anticipada y Precalentamiento de Ventana

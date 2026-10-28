@@ -1,7 +1,7 @@
-Coloca en esta carpeta la imagen fija que deseas difundir en los grupos.
+Coloca en esta carpeta las imágenes que deseas difundir en los grupos (puedes colocar una o varias para rotación aleatoria).
 Formatos soportados:
 - .png
 - .jpg
 - .jpeg
 
-El bot tomará automáticamente la imagen que coloques aquí y la enviará junto con un texto aleatorio como pie de foto (caption).
+El bot elegirá aleatoriamente una imagen de esta carpeta para cada grupo, combinándola con uno de los textos aleatorios y generando un hash único de archivo para mitigar detecciones por spam.
