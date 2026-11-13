@@ -15,7 +15,8 @@ function sleep(ms) {
  */
 async function esperarSincronizacionInicial(duracionMs = 60000) {
     console.log(`\n======================================================`);
-    console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Cliente listo. Iniciando tiempo de estabilización (1 minuto)...`);
+    const segTotales = Math.round(duracionMs / 1000);
+    console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Cliente listo. Iniciando tiempo de estabilización (${segTotales}s)...`);
     console.log(`======================================================`);
 
     const intervalMs = 15000;

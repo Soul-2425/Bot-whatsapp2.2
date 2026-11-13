@@ -111,6 +111,21 @@ function obtenerImagenAleatoria(imagenes) {
 }
 
 /**
+ * Alterna de manera estricta y secuencial entre las imágenes disponibles (Round-Robin).
+ * Garantiza que dos grupos consecutivos NUNCA reciban la misma imagen para mitigar riesgo de baneo.
+ * @param {Array<string>} imagenes Lista de rutas de imágenes
+ * @param {number} indice Índice del grupo o envío
+ * @returns {string} Ruta de la imagen seleccionada
+ */
+function obtenerImagenAlternada(imagenes, indice = 0) {
+    if (!imagenes || imagenes.length === 0) {
+        throw new Error('No hay imágenes disponibles para seleccionar.');
+    }
+    const ordenadas = [...imagenes].sort();
+    return ordenadas[Math.abs(indice) % ordenadas.length];
+}
+
+/**
  * Obtiene una imagen aleatoria (por retrocompatibilidad si es llamada externamente)
  * @returns {string} Ruta absoluta del archivo de imagen
  */
@@ -127,14 +142,17 @@ function obtenerRutaImagen() {
  * @param {number|string} indice Identificador del grupo/envío
  * @returns {MessageMedia}
  */
+/**
+ * Crea una instancia limpia de MessageMedia a partir de la imagen.
+ * @param {string} rutaImagen Ruta absoluta de la imagen
+ * @param {number|string} indice Identificador del grupo/envío
+ * @returns {MessageMedia}
+ */
 function crearMediaParaEnvio(rutaImagen, indice) {
     const rawBuffer = fs.readFileSync(rutaImagen);
-    // Marca única tras el final del archivo para garantizar hash único sin alterar la visualización
-    const marcaUnica = Buffer.from(`\n<!-- whats2_media_${indice}_${Date.now()}_${Math.random()} -->`, 'utf8');
-    const bufferUnico = Buffer.concat([rawBuffer, marcaUnica]);
     const ext = path.extname(rutaImagen).toLowerCase();
     const mimetype = ext === '.png' ? 'image/png' : 'image/jpeg';
-    return new MessageMedia(mimetype, bufferUnico.toString('base64'), path.basename(rutaImagen));
+    return new MessageMedia(mimetype, rawBuffer.toString('base64'), path.basename(rutaImagen));
 }
 
 /**
@@ -199,10 +217,11 @@ async function verificarPermisoGrupoLigero(client, groupId, myWid) {
                     let chat = window.require('WAWebCollections').Chat.get(chatWid);
 
                     if (!chat && window.require('WAWebFindChatAction')) {
-                        chat = (await window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid))?.chat;
+                        const res = await window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid);
+                        chat = res?.chat || res;
                     }
 
-                    if (!chat) return { puedeEnviar: true };
+                    if (!chat) return { puedeEnviar: false, razon: 'chat_no_encontrado' };
 
                     // 1. Verificación inmediata de solo lectura en el chat
                     if (chat.isReadOnly) {
@@ -283,18 +302,19 @@ async function verificarPermisoGrupoLigero(client, groupId, myWid) {
             'Timeout al validar permisos'
         );
 
-        return resultado.puedeEnviar;
+        return resultado || { puedeEnviar: true };
     } catch (err) {
-        return true;
+        return { puedeEnviar: true };
     }
 }
 
 /**
- * Pausa de seguridad optimizada entre 8 y 13 segundos entre grupos consecutivos.
+ * Pausa de seguridad optimizada entre 10 y 15 segundos entre grupos consecutivos.
  * Aprovecha este intervalo activo para:
- * 1. Liberar la memoria y vaciar la caché de WhatsApp Web (WAWebMediaInMemoryBlobCache y GC).
- * 2. Preparar el contenido del siguiente grupo (generar imagen con hash SHA-256 fresco y texto aleatorio).
- * 3. Precalentar metadatos en segundo plano sin colgar el navegador.
+ * 1. Liberar la memoria y vaciar la caché de WhatsApp Web (GC y buffers).
+ * 2. Cargar y sincronizar el siguiente grupo por su ID del archivo grupos.txt.
+ * 3. Preparar el contenido del siguiente grupo (imagen fresca rotada secuencialmente y texto aleatorio).
+ * 4. Precalentar metadatos y participantes en segundo plano para evitar congelamiento en grupos masivos.
  * @returns {Promise<{proximoTexto: string|null, proximaMedia: MessageMedia|null, proximoNombreImagen: string|null}>}
  */
 async function pausaInterGrupoConPreparacion({
@@ -304,8 +324,8 @@ async function pausaInterGrupoConPreparacion({
     textos,
     ciclo,
     siguienteIndice,
-    minMs = 8000,
-    maxMs = 13000
+    minMs = 10000,
+    maxMs = 15000
 }) {
     const t0 = Date.now();
     const delay = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
@@ -313,21 +333,9 @@ async function pausaInterGrupoConPreparacion({
 
     console.log(`[${getTimestamp()}] [PAUSA DE SEGURIDAD] Esperando ${segundos}s antes del siguiente grupo...`);
 
-    // 1. Liberar caché de medios y memoria en el navegador
+    // 1. Recolección de basura segura y liberación de memoria
     try {
         await client.pupPage.evaluate(() => {
-            try {
-                if (window.require) {
-                    const blobCacheMod = window.require('WAWebMediaInMemoryBlobCache');
-                    if (blobCacheMod && blobCacheMod.InMemoryMediaBlobCache) {
-                        const cache = blobCacheMod.InMemoryMediaBlobCache;
-                        if (typeof cache.clear === 'function') cache.clear();
-                        else if (cache._cache && typeof cache._cache.clear === 'function') cache._cache.clear();
-                        else if (cache._map && typeof cache._map.clear === 'function') cache._map.clear();
-                    }
-                }
-            } catch (eBlob) {}
-
             try {
                 if (window.gc) window.gc();
             } catch (eGc) {}
@@ -339,33 +347,38 @@ async function pausaInterGrupoConPreparacion({
     let proximaMedia = null;
     let proximoNombreImagen = null;
 
-    // 2. Preparar anticipadamente texto, imagen fresca (aleatoria) y precalentar modelo del siguiente grupo
+    // 2. Preparar anticipadamente texto, imagen fresca (alternada entre las imágenes disponibles) y sincronizar siguiente grupo por ID
     if (siguienteGrupo) {
         proximoTexto = textos[Math.floor(Math.random() * textos.length)];
-        const imgSeleccionada = obtenerImagenAleatoria(imagenes);
+        const imgSeleccionada = obtenerImagenAlternada(imagenes, siguienteIndice);
         proximoNombreImagen = path.basename(imgSeleccionada);
         proximaMedia = crearMediaParaEnvio(imgSeleccionada, `${ciclo}_${siguienteIndice}`);
 
         try {
-            await client.pupPage.evaluate(async (id) => {
-                try {
-                    const wid = window.require('WAWebWidFactory').createWid(id);
-                    let chat = window.require('WAWebCollections').Chat.get(wid);
-                    if (!chat && window.require('WAWebFindChatAction')) {
-                        chat = (await window.require('WAWebFindChatAction').findOrCreateLatestChat(wid))?.chat;
-                    }
-                    const GroupCol = window.require('WAWebCollections').GroupMetadata || window.require('WAWebCollections').WAWebGroupMetadataCollection;
-                    if (GroupCol && typeof GroupCol.find === 'function') {
-                        const meta = await GroupCol.find(wid);
-                        if (meta && chat) chat.groupMetadata = meta;
-                    }
-                } catch (e) {}
-            }, siguienteGrupo.id);
-            console.log(`[${getTimestamp()}] [PREPARADO] Metadatos y claves activadas para: "${siguienteGrupo.nombre}"`);
+            await conTimeout(
+                client.pupPage.evaluate(async (id) => {
+                    try {
+                        const wid = window.require('WAWebWidFactory').createWid(id);
+                        let chat = window.require('WAWebCollections').Chat.get(wid);
+                        if (!chat && window.require('WAWebFindChatAction')) {
+                            const res = await window.require('WAWebFindChatAction').findOrCreateLatestChat(wid);
+                            chat = res?.chat || res;
+                        }
+                        const GroupCol = window.require('WAWebCollections').GroupMetadata || window.require('WAWebCollections').WAWebGroupMetadataCollection;
+                        if (GroupCol && typeof GroupCol.find === 'function') {
+                            const meta = await GroupCol.find(wid);
+                            if (meta && chat) chat.groupMetadata = meta;
+                        }
+                    } catch (e) {}
+                }, siguienteGrupo.id),
+                6000,
+                'Timeout al sincronizar grupo'
+            );
+            console.log(`[${getTimestamp()}] [PREPARADO] Sincronizado siguiente grupo por ID: "${siguienteGrupo.nombre}" (${siguienteGrupo.id})`);
         } catch (ePrep) {}
     }
 
-    // 3. Completar exactamente el tiempo total de la pausa aleatoria (8 a 13 segundos)
+    // 3. Completar exactamente el tiempo total de la pausa aleatoria (10 a 15 segundos)
     const tiempoConsumido = Date.now() - t0;
     const tiempoRestante = delay - tiempoConsumido;
     if (tiempoRestante > 0) {
@@ -376,45 +389,20 @@ async function pausaInterGrupoConPreparacion({
 }
 
 /**
- * Aplica descansos especiales optimizados para lograr ciclos rápidos de 35 a 45 minutos:
- * - Cada 25 grupos: descanso de 45 segundos
- * - Hito Grupo 8 / Grupo 80: descanso de 45 segundos
- * - Hito Grupo 50: descanso de 1m 30s (90 segundos)
- * - Hito Grupo 100: descanso de 1m 30s (90 segundos)
- * - Hito Grupo 150: descanso de 45 segundos
+ * Aplica descanso especial estricto cada 25 grupos enviados:
+ * - Cada 25 grupos: descanso de 30 segundos
+ * @param {number} enviados Cantidad de grupos enviados exitosamente
+ * @param {number} totalGrupos Total de grupos en la lista
+ * @param {Object|null} siguienteGrupo Próximo grupo a procesar
  */
-async function aplicarDescansoEspecial(numeroGrupo, totalGrupos, siguienteGrupo) {
-    if (!siguienteGrupo) return;
+async function aplicarDescansoEspecial(enviados, totalGrupos, siguienteGrupo) {
+    if (!siguienteGrupo || enviados <= 0) return;
 
-    let duracionMs = 0;
-    let descripcion = '';
-
-    if (numeroGrupo === 50) {
-        duracionMs = 90000;
-        descripcion = `Hito Grupo 50: Pausa de enfriamiento de 1m 30s (90 segundos)`;
-    } else if (numeroGrupo === 100) {
-        duracionMs = 90000;
-        descripcion = `Hito Grupo 100: Pausa de enfriamiento de 1m 30s (90 segundos)`;
-    } else if (numeroGrupo === 150) {
-        duracionMs = 45000;
-        descripcion = `Hito Grupo 150: Pausa de enfriamiento de 45 segundos`;
-    } else if (numeroGrupo === 120) {
-        duracionMs = 45000;
-        descripcion = `Hito Grupo 120: Pausa de enfriamiento de 45 segundos`;
-    } else if (numeroGrupo === 8) {
-        duracionMs = 45000;
-        descripcion = `Hito Grupo 8: Pausa de enfriamiento de 45 segundos`;
-    } else if (numeroGrupo % 20 === 0) {
-        duracionMs = 45000;
-        descripcion = `Lote de 20 grupos (${numeroGrupo}/${totalGrupos}): Pausa de 45 segundos`;
-    }
-
-    if (duracionMs > 0) {
+    if (enviados % 25 === 0) {
+        const duracionMs = 30000; // 30 segundos exactos
         console.log(`\n======================================================`);
-        console.log(`\n======================================================`);
-        console.log(`[${getTimestamp()}] [DESCANSO DE SEGURIDAD] ${descripcion}...`);
-        console.log(`[${getTimestamp()}] Enfriamiento activo para proteger la reputación de la cuenta...`);
-        console.log(`======================================================`);
+        console.log(`[${getTimestamp()}] [DESCANSO DE SEGURIDAD] Lote de 25 grupos completado (${enviados}/${totalGrupos})...`);
+        console.log(`[${getTimestamp()}] Pausa de enfriamiento de 30 segundos para proteger la reputación de la cuenta...`);
         console.log(`======================================================\n`);
         await sleep(duracionMs);
     }
@@ -475,25 +463,30 @@ async function ejecutarCiclos(client) {
 
         // Preparar anticipadamente el primer grupo del ciclo
         let textoActual = textos[Math.floor(Math.random() * textos.length)];
-        let imgActual = obtenerImagenAleatoria(imagenes);
+        let imgActual = obtenerImagenAlternada(imagenes, 0);
         let nombreImagenActual = path.basename(imgActual);
         let mediaActual = crearMediaParaEnvio(imgActual, `${ciclo}_0`);
         try {
-            await client.pupPage.evaluate(async (id) => {
-                try {
-                    const wid = window.require('WAWebWidFactory').createWid(id);
-                    let chat = window.require('WAWebCollections').Chat.get(wid);
-                    if (!chat && window.require('WAWebFindChatAction')) {
-                        chat = (await window.require('WAWebFindChatAction').findOrCreateLatestChat(wid))?.chat;
-                    }
-                    const GroupCol = window.require('WAWebCollections').GroupMetadata || window.require('WAWebCollections').WAWebGroupMetadataCollection;
-                    if (GroupCol && typeof GroupCol.find === 'function') {
-                        const meta = await GroupCol.find(wid);
-                        if (meta && chat) chat.groupMetadata = meta;
-                    }
-                } catch (e) {}
-            }, grupos[0].id);
-            await sleep(1500); // Pequeña estabilización inicial para el primer grupo
+            await conTimeout(
+                client.pupPage.evaluate(async (id) => {
+                    try {
+                        const wid = window.require('WAWebWidFactory').createWid(id);
+                        let chat = window.require('WAWebCollections').Chat.get(wid);
+                        if (!chat && window.require('WAWebFindChatAction')) {
+                            const res = await window.require('WAWebFindChatAction').findOrCreateLatestChat(wid);
+                            chat = res?.chat || res;
+                        }
+                        const GroupCol = window.require('WAWebCollections').GroupMetadata || window.require('WAWebCollections').WAWebGroupMetadataCollection;
+                        if (GroupCol && typeof GroupCol.find === 'function') {
+                            const meta = await GroupCol.find(wid);
+                            if (meta && chat) chat.groupMetadata = meta;
+                        }
+                    } catch (e) {}
+                }, grupos[0].id),
+                6000,
+                'Timeout en precalentamiento inicial'
+            );
+            await sleep(1000); // Pequeña estabilización inicial para el primer grupo
         } catch (eWin0) {}
 
         for (let i = 0; i < grupos.length; i++) {
@@ -508,32 +501,23 @@ async function ejecutarCiclos(client) {
 
             try {
                 // 1. Verificación rápida de permisos de escritura en el grupo
-                const puedeEscribir = await verificarPermisoGrupoLigero(client, grupo.id, myWid);
+                const permiso = await verificarPermisoGrupoLigero(client, grupo.id, myWid);
 
-                if (!puedeEscribir) {
-                    contadorSoloAdmins++;
-                    console.log(`[${getTimestamp()}] [SOLO ADMINS] Omitido: Solo administradores pueden enviar mensajes.`);
-                    console.log(`\n======================================================`);
+                if (!permiso.puedeEnviar) {
+                    if (permiso.razon === 'chat_no_encontrado') {
+                        console.log(`[${getTimestamp()}] [NO ENCONTRADO] Omitido: El grupo no existe o la cuenta no pertenece a él.`);
+                    } else {
+                        contadorSoloAdmins++;
+                        console.log(`[${getTimestamp()}] [SOLO ADMINS] Omitido: Solo administradores pueden enviar mensajes.`);
+                    }
                     console.log(`\n======================================================\n`);
 
-                    if (siguienteGrupo) {
-                        const prep = await pausaInterGrupoConPreparacion({
-                            client,
-                            siguienteGrupo,
-                            imagenes,
-                            textos,
-                            ciclo,
-                            siguienteIndice: i + 1,
-                            minMs: 8000,
-                            maxMs: 13000
-                        });
-                        textoActual = prep.proximoTexto;
-                        mediaActual = prep.proximaMedia;
-                        nombreImagenActual = prep.proximoNombreImagen;
-                    }
+                    mediaActual = null;
+                    textoActual = null;
+                    nombreImagenActual = null;
 
-                    // Descanso especial anti-baneos o de lote cada 25 grupos
-                    await aplicarDescansoEspecial(i + 1, grupos.length, siguienteGrupo);
+                    // Salto rápido de 1 segundo sin pausas largas innecesarias
+                    await sleep(1000);
                     continue;
                 }
 
@@ -542,29 +526,33 @@ async function ejecutarCiclos(client) {
                     textoActual = textos[Math.floor(Math.random() * textos.length)];
                 }
                 if (!mediaActual) {
-                    const imgRandom = obtenerImagenAleatoria(imagenes);
-                    nombreImagenActual = path.basename(imgRandom);
-                    mediaActual = crearMediaParaEnvio(imgRandom, `${ciclo}_${i}`);
+                    const imgSel = obtenerImagenAlternada(imagenes, i);
+                    nombreImagenActual = path.basename(imgSel);
+                    mediaActual = crearMediaParaEnvio(imgSel, `${ciclo}_${i}`);
                 }
 
                 // 3. Simular presencia humana ("escribiendo...") por 1 segundo antes de enviar
                 try {
-                    await client.pupPage.evaluate(async (chatId) => {
-                        try {
-                            const chatWid = window.require('WAWebWidFactory').createWid(chatId);
-                            const chat = window.require('WAWebCollections').Chat.get(chatWid);
-                            if (chat && window.require('WAWebSendChatStateMsgAction')) {
-                                window.require('WAWebSendChatStateMsgAction').sendChatStateComposing(chat);
-                            }
-                        } catch (e) {}
-                    }, grupo.id);
+                    await conTimeout(
+                        client.pupPage.evaluate(async (chatId) => {
+                            try {
+                                const chatWid = window.require('WAWebWidFactory').createWid(chatId);
+                                const chat = window.require('WAWebCollections').Chat.get(chatWid);
+                                if (chat && window.require('WAWebSendChatStateMsgAction')) {
+                                    window.require('WAWebSendChatStateMsgAction').sendChatStateComposing(chat);
+                                }
+                            } catch (e) {}
+                        }, grupo.id),
+                        3000,
+                        'Timeout en presencia escribiendo'
+                    );
                     await sleep(1000);
                 } catch (eType) {}
 
                 // 4. Informar estado previo de envío
                 console.log(`[${getTimestamp()}] [ENVIANDO] Transmitiendo imagen (${nombreImagenActual}) y texto aleatorio...`);
 
-                // 5. Enviar mensaje multimedia con timeout de 45s y reintento resiliente si el contexto de página se restablece
+                // 5. Enviar mensaje multimedia a través de WhatsApp Web (con 50s de timeout para grupos masivos)
                 let enviadoExitoso = false;
                 for (let intento = 1; intento <= 2; intento++) {
                     try {
@@ -573,8 +561,8 @@ async function ejecutarCiclos(client) {
                                 caption: textoActual,
                                 waitUntilMsgSent: false
                             }),
-                            45000,
-                            'No se pudo encolar el mensaje en WhatsApp Web en 45s'
+                            50000,
+                            'No se pudo encolar el mensaje en WhatsApp Web en 50s'
                         );
                         enviadoExitoso = true;
                         break;
@@ -588,18 +576,26 @@ async function ejecutarCiclos(client) {
                     }
                 }
 
-                // Espera de 1.5 segundos para que WhatsApp Web procese la imagen en segundo plano
-                await sleep(1500);
+                if (!enviadoExitoso) {
+                    mediaActual = null;
+                    textoActual = null;
+                    nombreImagenActual = null;
+                    await sleep(1000);
+                    continue;
+                }
+
+                // Pausa de 3.5 segundos para que WhatsApp Web procese y comience a subir la imagen
+                await sleep(3500);
 
                 contadorEnviados++;
-                console.log(`[${getTimestamp()}] [ENVIADO] Mensaje e imagen (${nombreImagenActual}) entregados con éxito.`);
+                console.log(`[${getTimestamp()}] [ENVIADO] Mensaje e imagen (${nombreImagenActual}) transmitidos al grupo.`);
 
                 // Liberar referencia del buffer enviado para liberar memoria
                 mediaActual = null;
                 textoActual = null;
                 nombreImagenActual = null;
 
-                // 6. Pausa de seguridad optimizada (8 a 13 segundos) con liberación de caché y preparación del siguiente grupo
+                // 6. Pausa de seguridad (10 a 15 segundos) donde WhatsApp Web completa la subida, se libera caché y se sincroniza el siguiente grupo
                 if (siguienteGrupo) {
                     const prep = await pausaInterGrupoConPreparacion({
                         client,
@@ -608,8 +604,8 @@ async function ejecutarCiclos(client) {
                         textos,
                         ciclo,
                         siguienteIndice: i + 1,
-                        minMs: 8000,
-                        maxMs: 13000
+                        minMs: 10000,
+                        maxMs: 15000
                     });
                     textoActual = prep.proximoTexto;
                     mediaActual = prep.proximaMedia;
@@ -618,8 +614,8 @@ async function ejecutarCiclos(client) {
                 console.log(`\n======================================================`);
                 console.log(`\n======================================================\n`);
 
-                // 7. Descanso especial anti-baneos o de lote cada 25 grupos
-                await aplicarDescansoEspecial(i + 1, grupos.length, siguienteGrupo);
+                // 7. Descanso especial anti-baneos estricto cada 25 grupos enviados
+                await aplicarDescansoEspecial(contadorEnviados, grupos.length, siguienteGrupo);
 
             } catch (err) {
                 // Detectar si fue error de permisos / solo administradores
@@ -638,7 +634,7 @@ async function ejecutarCiclos(client) {
                 textoActual = null;
                 nombreImagenActual = null;
 
-                // Si hay siguiente grupo, mantener SIEMPRE la pausa de seguridad (8 a 13s) para no disparar ráfagas
+                // Si hay siguiente grupo, mantener SIEMPRE la pausa de seguridad (10 a 15s) para no disparar ráfagas
                 if (siguienteGrupo) {
                     const prep = await pausaInterGrupoConPreparacion({
                         client,
@@ -647,16 +643,13 @@ async function ejecutarCiclos(client) {
                         textos,
                         ciclo,
                         siguienteIndice: i + 1,
-                        minMs: 8000,
-                        maxMs: 13000
+                        minMs: 10000,
+                        maxMs: 15000
                     });
                     textoActual = prep.proximoTexto;
                     mediaActual = prep.proximaMedia;
                     nombreImagenActual = prep.proximoNombreImagen;
                 }
-
-                // Descanso especial anti-baneos o de lote cada 25 grupos si coincidió con fallo
-                await aplicarDescansoEspecial(i + 1, grupos.length, siguienteGrupo);
             }
         }
 
@@ -715,6 +708,7 @@ module.exports = {
     obtenerRutaImagen,
     cargarImagenes,
     obtenerImagenAleatoria,
+    obtenerImagenAlternada,
     guardarEstado,
     cargarEstado
 };

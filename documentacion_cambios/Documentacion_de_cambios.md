@@ -4,6 +4,19 @@ Todas las modificaciones, optimizaciones y versiones notables de este proyecto e
 
 ---
 
+## [Versión 1.2.0] - 2026-11-13
+
+### Optimización Integral de Envíos, Tiempos de Seguridad y Guía de Arquitectura
+- **Ajuste Estricto de Descansos por Hitos:** Se eliminaron los descansos redundantes de hitos individuales (8, 20, 50, etc.) y se estableció un descanso de enfriamiento estricto de **30 segundos cada 25 grupos enviados exitosamente**.
+- **Pausa Inter-Grupo de 10 a 15 Segundos:** Se ajustó el intervalo entre grupos a 10-15s (`minMs: 10000, maxMs: 15000`), aprovechando este tiempo para liberar memoria RAM (`window.gc()`), sincronizar el siguiente chat por ID desde `grupos.txt` y precalentar metadatos en segundo plano.
+- **Soporte para Grupos Masivos (Timeout 50s):** Se amplió el límite de encolado a 50s para procesar sin fallas las claves criptográficas Signal en grupos con cientos de participantes (ej. D'G VENTAS).
+- **Prevención de Descansos Dobles:** Se retiraron las invocaciones de descanso dentro de los bloques de captura de excepciones (`catch`).
+- **Rotación Anti-Baneo Round-Robin:** Alternancia secuencial estricta entre imágenes de la carpeta `img/` para mitigar firmas de spam.
+- **Actualización de Mensajes:** Reemplazo de los 20 textos comerciales enfocados en creación y diseño de páginas web profesionales con confirmación de trato con administrador.
+- **Documentación y Guía Formativa:** Incorporación del documento `GUIA_DE_ESTUDIO_Y_ARQUITECTURA.md` con roadmap de estudio desde básico a avanzado y desglose de APIs internas.
+
+---
+
 ## [Versión 1.1.0] - 2026-10-28
 
 ### Incorporación de Utilidades de Mantenimiento (`Actualizar.bat`, `Borrar_Cache.bat`, `Borrar_Sesion.bat`)
