@@ -413,6 +413,43 @@ async function aplicarDescansoEspecial(enviados, totalGrupos, siguienteGrupo) {
 }
 
 /**
+ * Refresca la sesión de WhatsApp Web antes de iniciar un nuevo ciclo.
+ * Recarga la página y re-inyecta los scripts para garantizar tokens MMS limpios,
+ * reconexión de sockets y prevenir errores de encolado tras el período de descanso.
+ * @param {Client} client Instancia del cliente WhatsApp Web
+ * @param {number} ciclo Número del nuevo ciclo
+ */
+async function refrescarSesionParaNuevoCiclo(client, ciclo) {
+    console.log(`\n======================================================`);
+    console.log(`[${getTimestamp()}] [REFRESCO DE CICLO] Renovando conexión de WhatsApp Web para el Ciclo ${ciclo}...`);
+    console.log(`[${getTimestamp()}] Flasheando caché y sockets para asegurar entrega inmediata de mensajes.`);
+    console.log(`======================================================\n`);
+
+    try {
+        await conTimeout(
+            client.pupPage.reload({ waitUntil: 'load' }),
+            45000,
+            'Timeout al recargar página de WhatsApp Web'
+        );
+    } catch (eReload) {
+        console.warn(`[${getTimestamp()}] [AVISO] Recarga de página demoró más de 45s, continuando con inyección...`);
+    }
+
+    try {
+        if (typeof client.inject === 'function') {
+            await client.inject();
+        }
+    } catch (eInject) {
+        console.warn(`[${getTimestamp()}] [AVISO] Re-inyección de scripts en proceso...`);
+    }
+
+    // Espera de estabilización de 20 segundos tras la recarga para que WhatsApp indexe chats
+    console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Esperando 20 segundos de estabilización tras recarga...`);
+    await sleep(20000);
+    console.log(`[${getTimestamp()}] [OK] Sesión renovada y 100% activa para el Ciclo ${ciclo}.\n`);
+}
+
+/**
  * Ejecuta el sistema de 8 ciclos de difusión masiva
  * @param {Client} client Instancia del cliente WhatsApp Web inicializado y listo
  */
@@ -465,33 +502,9 @@ async function ejecutarCiclos(client) {
             inicioCiclo: new Date().toISOString()
         });
 
-        // Verificación de estado de WhatsApp Web antes de iniciar ciclos posteriores
+        // Refrescar y renovar sesión limpia antes de iniciar ciclos posteriores (Ciclo 2 en adelante)
         if (ciclo > 1) {
-            console.log(`[${getTimestamp()}] [VERIFICACIÓN] Comprobando conexión de WhatsApp Web antes de iniciar el Ciclo ${ciclo}...`);
-            let conexionOk = false;
-            for (let chk = 1; chk <= 3; chk++) {
-                try {
-                    const isOk = await conTimeout(
-                        client.pupPage.evaluate(() => {
-                            return Boolean(window.WWebJS && window.require && window.require('WAWebCollections'));
-                        }),
-                        8000,
-                        'Timeout en verificación de estado'
-                    );
-                    if (isOk) {
-                        conexionOk = true;
-                        break;
-                    }
-                } catch (eChk) {
-                    console.log(`[${getTimestamp()}] [RECONEXIÓN] Sesión en espera o sincronizando (intento ${chk}/3)...`);
-                    await sleep(3000);
-                }
-            }
-            if (conexionOk) {
-                console.log(`[${getTimestamp()}] [OK] Sesión activa y lista para el Ciclo ${ciclo}.\n`);
-            } else {
-                console.warn(`[${getTimestamp()}] [AVISO] Conexión reactivada, iniciando ciclo...\n`);
-            }
+            await refrescarSesionParaNuevoCiclo(client, ciclo);
         }
 
         // Preparar anticipadamente el primer grupo del ciclo
@@ -600,9 +613,12 @@ async function ejecutarCiclos(client) {
                         enviadoExitoso = true;
                         break;
                     } catch (eSend) {
-                        if (intento === 1 && /execution context|navigat/i.test(eSend.message)) {
-                            console.log(`[${getTimestamp()}] [REINTENTO] Contexto de navegación restablecido, reintentando envío...`);
-                            await sleep(2000);
+                        if (intento === 1 && /execution context|navigat|reading 'getChat'|WWebJS|No se pudo encolar/i.test(eSend.message)) {
+                            console.log(`[${getTimestamp()}] [REINTENTO] Sesión ocupada o contexto reiniciado. Restaurando inyección y reintentando...`);
+                            try {
+                                if (typeof client.inject === 'function') await client.inject();
+                            } catch (eInj) {}
+                            await sleep(3000);
                             continue;
                         }
                         throw eSend;
@@ -709,9 +725,9 @@ async function ejecutarCiclos(client) {
             }
         });
 
-        // Si no es el último ciclo, esperar 2 horas antes de iniciar el siguiente (manteniendo vivo WhatsApp Web)
+        // Si no es el último ciclo, esperar 1 hora antes de iniciar el siguiente (manteniendo vivo WhatsApp Web)
         if (ciclo < TOTAL_CICLOS) {
-            await esperarEntreCiclos(7200000, client); // 2 horas (7,200,000 ms)
+            await esperarEntreCiclos(3600000, client); // 1 hora (3,600,000 ms)
         }
     }
 

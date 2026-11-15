@@ -47,13 +47,13 @@ async function esperarEntreMensajes(minMs = 8000, maxMs = 13000) {
 }
 
 /**
- * Espera de descanso programado entre ciclos consecutivos (por defecto 2 horas = 7,200,000 ms).
+ * Espera de descanso programado entre ciclos consecutivos (ajustado a 1 hora = 3,600,000 ms).
  * Informa el progreso activamente en la consola y envía pings ligeros de keep-alive para que Chromium
  * no suspenda el proceso ni pierda la conexión con WhatsApp Web.
- * @param {number} duracionMs Duración en ms (default: 2 horas = 7200000)
+ * @param {number} duracionMs Duración en ms (default: 1 hora = 3600000)
  * @param {Object|null} client Instancia del cliente para mantener el socket activo
  */
-async function esperarEntreCiclos(duracionMs = 7200000, client = null) {
+async function esperarEntreCiclos(duracionMs = 3600000, client = null) {
     const horasTotales = (duracionMs / (3600 * 1000)).toFixed(1);
     console.log(`\n======================================================`);
     console.log(`[${getTimestamp()}] [PAUSA ENTRE CICLOS] Pausa de descanso programada de ${horasTotales}h para proteger la cuenta.`);
@@ -81,7 +81,7 @@ async function esperarEntreCiclos(duracionMs = 7200000, client = null) {
                     client.pupPage.evaluate(() => Boolean(window.WWebJS)),
                     new Promise(r => setTimeout(r, 2000))
                 ]);
-            } catch (ePing) {}
+            } catch (ePing) { }
         }
 
         const paso = Math.min(intervalMs, restante);
@@ -89,7 +89,7 @@ async function esperarEntreCiclos(duracionMs = 7200000, client = null) {
         restante -= paso;
     }
 
-    console.log(`\n[${getTimestamp()}] [REANUDANDO] Fin de la pausa de enfriamiento. Iniciando siguiente ciclo.\n`);
+    console.log(`\n[${getTimestamp()}] [REANUDANDO] Fin de la pausa de enfriamiento de 1 hora. Iniciando siguiente ciclo.\n`);
 }
 
 module.exports = {
