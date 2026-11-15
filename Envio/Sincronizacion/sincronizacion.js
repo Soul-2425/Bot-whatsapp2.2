@@ -47,28 +47,49 @@ async function esperarEntreMensajes(minMs = 8000, maxMs = 13000) {
 }
 
 /**
- * Espera de 2 horas (7,200,000 ms) entre ciclos consecutivos
- * Informa el progreso periódicamente en la consola.
+ * Espera de descanso programado entre ciclos consecutivos (por defecto 2 horas = 7,200,000 ms).
+ * Informa el progreso activamente en la consola y envía pings ligeros de keep-alive para que Chromium
+ * no suspenda el proceso ni pierda la conexión con WhatsApp Web.
  * @param {number} duracionMs Duración en ms (default: 2 horas = 7200000)
+ * @param {Object|null} client Instancia del cliente para mantener el socket activo
  */
-async function esperarEntreCiclos(duracionMs = 7200000) {
+async function esperarEntreCiclos(duracionMs = 7200000, client = null) {
+    const horasTotales = (duracionMs / (3600 * 1000)).toFixed(1);
     console.log(`\n======================================================`);
-    console.log(`[${getTimestamp()}] [PAUSA ENTRE CICLOS] Esperando 2 horas para el siguiente ciclo...`);
+    console.log(`[${getTimestamp()}] [PAUSA ENTRE CICLOS] Pausa de descanso programada de ${horasTotales}h para proteger la cuenta.`);
+    console.log(`[${getTimestamp()}] WhatsApp Web se mantendrá sincronizado y activo en segundo plano.`);
     console.log(`======================================================`);
 
-    const intervalMs = 15 * 60 * 1000; // Informar cada 15 minutos
+    const intervalMs = 60 * 1000; // Paso de 1 minuto
     let restante = duracionMs;
+    let ultimoReporteMinutos = -1;
 
     while (restante > 0) {
         const horas = Math.floor(restante / (3600 * 1000));
         const minutos = Math.floor((restante % (3600 * 1000)) / 60000);
-        console.log(`[${getTimestamp()}] [EN ESPERA] Tiempo restante para el próximo ciclo: ${horas}h ${minutos}m.`);
+
+        // Reportar en consola cada 5 minutos o cuando resten menos de 5 minutos
+        if ((minutos % 5 === 0 && minutos !== ultimoReporteMinutos) || restante <= 300000) {
+            console.log(`[${getTimestamp()}] [EN ESPERA] Tiempo restante para el próximo ciclo: ${horas}h ${minutos}m.`);
+            ultimoReporteMinutos = minutos;
+        }
+
+        // Mantener viva la sesión en Chromium enviando un ping liviano cada minuto
+        if (client && client.pupPage) {
+            try {
+                await Promise.race([
+                    client.pupPage.evaluate(() => Boolean(window.WWebJS)),
+                    new Promise(r => setTimeout(r, 2000))
+                ]);
+            } catch (ePing) {}
+        }
+
         const paso = Math.min(intervalMs, restante);
         await sleep(paso);
         restante -= paso;
     }
 
-    console.log(`[${getTimestamp()}] [REANUDANDO] Fin de la pausa. Iniciando siguiente ciclo.\n`);
+    console.log(`\n[${getTimestamp()}] [REANUDANDO] Fin de la pausa de enfriamiento. Iniciando siguiente ciclo.\n`);
 }
 
 module.exports = {

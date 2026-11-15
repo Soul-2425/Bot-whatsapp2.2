@@ -333,13 +333,17 @@ async function pausaInterGrupoConPreparacion({
 
     console.log(`[${getTimestamp()}] [PAUSA DE SEGURIDAD] Esperando ${segundos}s antes del siguiente grupo...`);
 
-    // 1. Recolección de basura segura y liberación de memoria
+    // 1. Recolección de basura segura y liberación de memoria con timeout defensivo
     try {
-        await client.pupPage.evaluate(() => {
-            try {
-                if (window.gc) window.gc();
-            } catch (eGc) {}
-        });
+        await conTimeout(
+            client.pupPage.evaluate(() => {
+                try {
+                    if (window.gc) window.gc();
+                } catch (eGc) {}
+            }),
+            3000,
+            'Timeout en recolección de basura'
+        );
         console.log(`[${getTimestamp()}] [LIBERACIÓN CACHÉ] Memoria de WhatsApp Web y buffers multimedia liberados.`);
     } catch (eLimpieza) {}
 
@@ -460,6 +464,35 @@ async function ejecutarCiclos(client) {
             estadoCiclo: 'EN_PROCESO',
             inicioCiclo: new Date().toISOString()
         });
+
+        // Verificación de estado de WhatsApp Web antes de iniciar ciclos posteriores
+        if (ciclo > 1) {
+            console.log(`[${getTimestamp()}] [VERIFICACIÓN] Comprobando conexión de WhatsApp Web antes de iniciar el Ciclo ${ciclo}...`);
+            let conexionOk = false;
+            for (let chk = 1; chk <= 3; chk++) {
+                try {
+                    const isOk = await conTimeout(
+                        client.pupPage.evaluate(() => {
+                            return Boolean(window.WWebJS && window.require && window.require('WAWebCollections'));
+                        }),
+                        8000,
+                        'Timeout en verificación de estado'
+                    );
+                    if (isOk) {
+                        conexionOk = true;
+                        break;
+                    }
+                } catch (eChk) {
+                    console.log(`[${getTimestamp()}] [RECONEXIÓN] Sesión en espera o sincronizando (intento ${chk}/3)...`);
+                    await sleep(3000);
+                }
+            }
+            if (conexionOk) {
+                console.log(`[${getTimestamp()}] [OK] Sesión activa y lista para el Ciclo ${ciclo}.\n`);
+            } else {
+                console.warn(`[${getTimestamp()}] [AVISO] Conexión reactivada, iniciando ciclo...\n`);
+            }
+        }
 
         // Preparar anticipadamente el primer grupo del ciclo
         let textoActual = textos[Math.floor(Math.random() * textos.length)];
@@ -676,9 +709,9 @@ async function ejecutarCiclos(client) {
             }
         });
 
-        // Si no es el último ciclo, esperar 2 horas antes de iniciar el siguiente
+        // Si no es el último ciclo, esperar 2 horas antes de iniciar el siguiente (manteniendo vivo WhatsApp Web)
         if (ciclo < TOTAL_CICLOS) {
-            await esperarEntreCiclos(7200000); // 2 horas (7,200,000 ms)
+            await esperarEntreCiclos(7200000, client); // 2 horas (7,200,000 ms)
         }
     }
 

@@ -38,6 +38,9 @@ function createWhatsAppClient(options = {}) {
                 '--no-first-run',
                 '--no-zygote',
                 '--disable-gpu',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
                 `--user-agent=${USER_AGENT}`
             ]
         },
