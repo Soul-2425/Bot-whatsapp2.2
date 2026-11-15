@@ -161,9 +161,9 @@ function crearMediaParaEnvio(rutaImagen, indice) {
  */
 function cargarTextos() {
     asegurarDirectorios();
-    const archivos = fs.readdirSync(TEXTOS_DIR).filter(file => 
-        file.endsWith('.txt') && 
-        !file.toLowerCase().startsWith('leeme') && 
+    const archivos = fs.readdirSync(TEXTOS_DIR).filter(file =>
+        file.endsWith('.txt') &&
+        !file.toLowerCase().startsWith('leeme') &&
         !file.toLowerCase().startsWith('readme')
     );
 
@@ -229,15 +229,15 @@ async function verificarPermisoGrupoLigero(client, groupId, myWid) {
                     }
 
                     // 2. Obtener metadata: memoria local o consultar store con find()
-                    const GroupMetadataCol = window.require('WAWebCollections').GroupMetadata || 
-                                             window.require('WAWebCollections').WAWebGroupMetadataCollection;
+                    const GroupMetadataCol = window.require('WAWebCollections').GroupMetadata ||
+                        window.require('WAWebCollections').WAWebGroupMetadataCollection;
                     let meta = chat.groupMetadata || (GroupMetadataCol && typeof GroupMetadataCol.get === 'function' ? GroupMetadataCol.get(chatWid) : null);
 
                     if (!meta && GroupMetadataCol && typeof GroupMetadataCol.find === 'function') {
                         try {
                             meta = await GroupMetadataCol.find(chatWid);
                             if (meta && chat) chat.groupMetadata = meta;
-                        } catch (eFind) {}
+                        } catch (eFind) { }
                     }
 
                     // 3. Si el grupo tiene restricción de solo administradores (announce)
@@ -253,7 +253,7 @@ async function verificarPermisoGrupoLigero(client, groupId, myWid) {
                                 meUser = pnObj ? (pnObj.user || pnObj._serialized || String(pnObj)) : null;
                                 lidUser = lidObj ? (lidObj.user || lidObj._serialized || String(lidObj)) : null;
                             }
-                        } catch (eMe) {}
+                        } catch (eMe) { }
 
                         if (!meUser && window.require('WAWebConnModel')) {
                             const Conn = window.require('WAWebConnModel').Conn;
@@ -265,7 +265,7 @@ async function verificarPermisoGrupoLigero(client, groupId, myWid) {
 
                         const myPn = meUser ? String(meUser).split(/[:@]/)[0] : '';
                         const myLid = lidUser ? String(lidUser).split(/[:@]/)[0] : '';
-                        
+
                         let participants = [];
                         const rawPart = meta.participants;
                         if (rawPart) {
@@ -339,13 +339,13 @@ async function pausaInterGrupoConPreparacion({
             client.pupPage.evaluate(() => {
                 try {
                     if (window.gc) window.gc();
-                } catch (eGc) {}
+                } catch (eGc) { }
             }),
             3000,
             'Timeout en recolección de basura'
         );
         console.log(`[${getTimestamp()}] [LIBERACIÓN CACHÉ] Memoria de WhatsApp Web y buffers multimedia liberados.`);
-    } catch (eLimpieza) {}
+    } catch (eLimpieza) { }
 
     let proximoTexto = null;
     let proximaMedia = null;
@@ -373,13 +373,13 @@ async function pausaInterGrupoConPreparacion({
                             const meta = await GroupCol.find(wid);
                             if (meta && chat) chat.groupMetadata = meta;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }, siguienteGrupo.id),
                 6000,
                 'Timeout al sincronizar grupo'
             );
             console.log(`[${getTimestamp()}] [PREPARADO] Sincronizado siguiente grupo por ID: "${siguienteGrupo.nombre}" (${siguienteGrupo.id})`);
-        } catch (ePrep) {}
+        } catch (ePrep) { }
     }
 
     // 3. Completar exactamente el tiempo total de la pausa aleatoria (10 a 15 segundos)
@@ -432,20 +432,24 @@ async function refrescarSesionParaNuevoCiclo(client, ciclo) {
             'Timeout al recargar página de WhatsApp Web'
         );
     } catch (eReload) {
-        console.warn(`[${getTimestamp()}] [AVISO] Recarga de página demoró más de 45s, continuando con inyección...`);
+        console.warn(`[${getTimestamp()}] [AVISO] Recarga de página demoró más de 45s...`);
     }
 
-    try {
-        if (typeof client.inject === 'function') {
-            await client.inject();
-        }
-    } catch (eInject) {
-        console.warn(`[${getTimestamp()}] [AVISO] Re-inyección de scripts en proceso...`);
+    // Esperar a que WhatsApp Web cargue e indexe WWebJS
+    for (let w = 0; w < 20; w++) {
+        try {
+            const listo = await conTimeout(
+                client.pupPage.evaluate(() => typeof window.WWebJS !== 'undefined'),
+                2000
+            );
+            if (listo) break;
+        } catch (eW) {}
+        await sleep(1000);
     }
 
-    // Espera de estabilización de 20 segundos tras la recarga para que WhatsApp indexe chats
-    console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Esperando 20 segundos de estabilización tras recarga...`);
-    await sleep(20000);
+    // Espera de estabilización de 15 segundos tras la recarga para que WhatsApp indexe chats
+    console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Esperando 15 segundos de estabilización tras recarga...`);
+    await sleep(15000);
     console.log(`[${getTimestamp()}] [OK] Sesión renovada y 100% activa para el Ciclo ${ciclo}.\n`);
 }
 
@@ -527,20 +531,19 @@ async function ejecutarCiclos(client) {
                             const meta = await GroupCol.find(wid);
                             if (meta && chat) chat.groupMetadata = meta;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }, grupos[0].id),
                 6000,
                 'Timeout en precalentamiento inicial'
             );
             await sleep(1000); // Pequeña estabilización inicial para el primer grupo
-        } catch (eWin0) {}
+        } catch (eWin0) { }
 
         for (let i = 0; i < grupos.length; i++) {
             const grupo = grupos[i];
             const progreso = `[${i + 1}/${grupos.length}]`;
             const siguienteGrupo = (i + 1 < grupos.length) ? grupos[i + 1] : null;
 
-            console.log(`\n======================================================`);
             console.log(`\n======================================================`);
             console.log(`[${getTimestamp()}] GRUPO ${progreso}: "${grupo.nombre}"`);
             console.log(`ID: ${grupo.id}`);
@@ -587,13 +590,13 @@ async function ejecutarCiclos(client) {
                                 if (chat && window.require('WAWebSendChatStateMsgAction')) {
                                     window.require('WAWebSendChatStateMsgAction').sendChatStateComposing(chat);
                                 }
-                            } catch (e) {}
+                            } catch (e) { }
                         }, grupo.id),
                         3000,
                         'Timeout en presencia escribiendo'
                     );
                     await sleep(1000);
-                } catch (eType) {}
+                } catch (eType) { }
 
                 // 4. Informar estado previo de envío
                 console.log(`[${getTimestamp()}] [ENVIANDO] Transmitiendo imagen (${nombreImagenActual}) y texto aleatorio...`);
@@ -613,12 +616,9 @@ async function ejecutarCiclos(client) {
                         enviadoExitoso = true;
                         break;
                     } catch (eSend) {
-                        if (intento === 1 && /execution context|navigat|reading 'getChat'|WWebJS|No se pudo encolar/i.test(eSend.message)) {
-                            console.log(`[${getTimestamp()}] [REINTENTO] Sesión ocupada o contexto reiniciado. Restaurando inyección y reintentando...`);
-                            try {
-                                if (typeof client.inject === 'function') await client.inject();
-                            } catch (eInj) {}
-                            await sleep(3000);
+                        if (intento === 1 && /execution context|navigat/i.test(eSend.message)) {
+                            console.log(`[${getTimestamp()}] [REINTENTO] Contexto de navegación restablecido, reintentando envío...`);
+                            await sleep(2000);
                             continue;
                         }
                         throw eSend;
@@ -660,8 +660,7 @@ async function ejecutarCiclos(client) {
                     mediaActual = prep.proximaMedia;
                     nombreImagenActual = prep.proximoNombreImagen;
                 }
-                console.log(`\n======================================================`);
-                console.log(`\n======================================================\n`);
+                console.log(`======================================================\n`);
 
                 // 7. Descanso especial anti-baneos estricto cada 25 grupos enviados
                 await aplicarDescansoEspecial(contadorEnviados, grupos.length, siguienteGrupo);
@@ -676,8 +675,7 @@ async function ejecutarCiclos(client) {
                     console.error(`[${getTimestamp()}] [ERROR ENVÍO] Falló la entrega:`, err.message);
                     registrarError(`Error de envío al grupo ${grupo.id} (${grupo.nombre}) en ciclo ${ciclo}: ${err.message}`, err.stack, 'Continuar con el siguiente grupo', 'Registrado');
                 }
-                console.log(`\n======================================================`);
-                console.log(`\n======================================================\n`);
+                console.log(`======================================================\n`);
 
                 mediaActual = null;
                 textoActual = null;
