@@ -144,7 +144,15 @@ class Client extends EventEmitter {
         await this.pupPage.evaluate(ExposeAuthStore);
 
         const needAuthentication = await this.pupPage.evaluate(async () => {
-            let state = window.require('WAWebSocketModel').Socket.state;
+            for (let i = 0; i < 30; i++) {
+                try {
+                    const sm = window.require ? window.require('WAWebSocketModel') : null;
+                    if (sm && sm.Socket) break;
+                } catch (e) {}
+                await new Promise(r => setTimeout(r, 500));
+            }
+            const SocketModel = window.require ? window.require('WAWebSocketModel') : null;
+            let state = SocketModel?.Socket?.state;
 
             if (
                 state === 'OPENING' ||
@@ -155,7 +163,8 @@ class Client extends EventEmitter {
                 await new Promise((r) => {
                     const timer = setTimeout(() => {
                         try {
-                            window.require('WAWebSocketModel').Socket.off('change:state', waitTillInit);
+                            const sm = window.require ? window.require('WAWebSocketModel') : null;
+                            if (sm?.Socket?.off) sm.Socket.off('change:state', waitTillInit);
                         } catch (e) {}
                         r();
                     }, 20000);
@@ -167,25 +176,28 @@ class Client extends EventEmitter {
                             state !== 'PAIRING'
                         ) {
                             clearTimeout(timer);
-                            window
-                                .require('WAWebSocketModel')
-                                .Socket.off(
-                                    'change:state',
-                                    waitTillInit,
-                                );
+                            try {
+                                const sm = window.require ? window.require('WAWebSocketModel') : null;
+                                if (sm?.Socket?.off) sm.Socket.off('change:state', waitTillInit);
+                            } catch (e) {}
                             r();
                         }
                     }
 
-                    window
-                        .require('WAWebSocketModel')
-                        .Socket.on(
-                            'change:state',
-                            waitTillInit,
-                        );
+                    try {
+                        const sm = window.require ? window.require('WAWebSocketModel') : null;
+                        if (sm?.Socket?.on) {
+                            sm.Socket.on('change:state', waitTillInit);
+                        } else {
+                            r();
+                        }
+                    } catch (e) {
+                        r();
+                    }
                 });
             }
-            state = window.require('WAWebSocketModel').Socket.state;
+            const smFinal = window.require ? window.require('WAWebSocketModel') : null;
+            state = smFinal?.Socket?.state;
             return state == 'UNPAIRED' || state == 'UNPAIRED_IDLE' || state == 'PAIRING';
         });
 
@@ -432,28 +444,29 @@ class Client extends EventEmitter {
             },
         );
         await this.pupPage.evaluate(() => {
-            window
-                .require('WAWebSocketModel')
-                .Socket.on('change:state', (_AppState, state) => {
+            const socketModel = window.require ? window.require('WAWebSocketModel') : null;
+            if (socketModel && socketModel.Socket) {
+                socketModel.Socket.on('change:state', (_AppState, state) => {
                     window.onAuthAppStateChangedEvent(state);
                 });
-            window
-                .require('WAWebSocketModel')
-                .Socket.on('change:hasSynced', () => {
+                socketModel.Socket.on('change:hasSynced', () => {
                     window.onAppStateHasSyncedEvent();
                 });
-            const Cmd = window.require('WAWebCmd').Cmd;
-            Cmd.on('offline_progress_update_from_bridge', () => {
-                window.onOfflineProgressUpdateEvent(
-                    window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
-                );
-            });
-            Cmd.on('logout', async () => {
-                await window.onLogoutEvent();
-            });
-            Cmd.on('logout_from_bridge', async () => {
-                await window.onLogoutEvent();
-            });
+            }
+            const Cmd = window.require ? window.require('WAWebCmd')?.Cmd : null;
+            if (Cmd && typeof Cmd.on === 'function') {
+                Cmd.on('offline_progress_update_from_bridge', () => {
+                    window.onOfflineProgressUpdateEvent(
+                        window.AuthStore.OfflineMessageHandler.getOfflineDeliveryProgress(),
+                    );
+                });
+                Cmd.on('logout', async () => {
+                    await window.onLogoutEvent();
+                });
+                Cmd.on('logout_from_bridge', async () => {
+                    await window.onLogoutEvent();
+                });
+            }
         });
     }
 

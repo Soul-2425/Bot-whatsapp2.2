@@ -65,11 +65,9 @@ async function iniciarSistema() {
                 try { await client.destroy(); } catch (e) {}
             }
 
-            // Si fue una recarga interna de WhatsApp Web o navegación de contexto
-            if (intento < maxIntentos && /Execution context was destroyed|navigation|navigat|detached/i.test(err.message)) {
-                console.log(`[${getTimestamp()}] [RECUPERACIÓN] WhatsApp Web se recargó internamente para actualizar estado.`);
-                console.log(`[${getTimestamp()}] Reintentando conexión limpia en 3 segundos...\n`);
-                await new Promise(r => setTimeout(r, 3000));
+            if (intento < maxIntentos) {
+                console.log(`[${getTimestamp()}] [RECUPERACIÓN] Reintentando arranque limpio de WhatsApp Web (Intento ${intento + 1}/${maxIntentos}) en 4 segundos...\n`);
+                await new Promise(r => setTimeout(r, 4000));
                 continue;
             }
 
