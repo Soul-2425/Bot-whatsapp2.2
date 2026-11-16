@@ -59,6 +59,7 @@ function createWhatsAppClient(options = {}) {
 
     // Evento de autenticación exitosa
     client.on('authenticated', () => {
+        client._ultimaAutenticacion = Date.now();
         console.log(`[${getTimestamp()}] [SESIÓN] Autenticación validada con éxito. Sesión guardada en /Seccion.`);
     });
 

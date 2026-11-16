@@ -413,6 +413,82 @@ async function aplicarDescansoEspecial(enviados, totalGrupos, siguienteGrupo) {
 }
 
 /**
+ * Verifica y asegura que la sesión de WhatsApp Web esté viva y lista para enviar.
+ * Si el contexto se destruyó, el frame se desprendió, WhatsApp Web rebotó o se produjo error 't',
+ * recarga la página y espera la estabilización completa de IndexedDB y tokens MMS.
+ * @param {Client} client Instancia del cliente WhatsApp Web
+ * @param {boolean} forzar Si se debe forzar la recarga inmediata de la sesión
+ */
+async function asegurarSesionSaludable(client, forzar = false) {
+    let saludable = false;
+    if (!forzar) {
+        try {
+            if (!client.pupPage || client.pupPage.isClosed()) {
+                saludable = false;
+            } else {
+                saludable = await conTimeout(
+                    client.pupPage.evaluate(() => {
+                        try {
+                            const WWebJS = window.WWebJS;
+                            const Socket = window.require && window.require('WAWebSocketModel')?.Socket;
+                            return Boolean(WWebJS && typeof WWebJS.sendMessage === 'function' && Socket?.state === 'CONNECTED');
+                        } catch (e) {
+                            return false;
+                        }
+                    }),
+                    4000
+                );
+            }
+        } catch (e) {
+            saludable = false;
+        }
+    }
+
+    if (!saludable || forzar) {
+        console.log(`\n======================================================`);
+        console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Sesión desincronizada o frame desprendido.`);
+        console.log(`[${getTimestamp()}] Restaurando conexión limpia de WhatsApp Web...`);
+        console.log(`======================================================\n`);
+
+        try {
+            await conTimeout(
+                client.pupPage.reload({ waitUntil: 'load' }),
+                45000,
+                'Timeout al recargar página de WhatsApp Web'
+            );
+        } catch (eRel) {
+            console.warn(`[${getTimestamp()}] [AVISO] Recarga de página demoró más de 45s...`);
+        }
+
+        // Esperar a que WhatsApp Web inyecte WWebJS
+        for (let w = 0; w < 30; w++) {
+            try {
+                const listo = await conTimeout(
+                    client.pupPage.evaluate(() => typeof window.WWebJS !== 'undefined'),
+                    2000
+                );
+                if (listo) break;
+            } catch (eW) {}
+            await sleep(1000);
+        }
+
+        // Espera de estabilización de 15 segundos para que WhatsApp indexe chats y reconecte MMS
+        console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Esperando 15 segundos para estabilizar base de datos y MMS...`);
+        await sleep(15000);
+        client._ultimaAutenticacion = Date.now();
+        console.log(`[${getTimestamp()}] [OK] Sesión 100% restablecida y lista para reanudar envíos.\n`);
+    } else {
+        // Si WhatsApp Web se resincronizó internamente hace menos de 15s, esperar el resto para evitar 't' en MMS
+        const tiempoDesdeAuth = Date.now() - (client._ultimaAutenticacion || 0);
+        if (tiempoDesdeAuth < 15000) {
+            const esperaMs = 15000 - tiempoDesdeAuth;
+            console.log(`[${getTimestamp()}] [ESTABILIZACIÓN] WhatsApp Web resincronizado recientemente. Esperando ${Math.ceil(esperaMs / 1000)}s para asegurar conexión MMS...`);
+            await sleep(esperaMs);
+        }
+    }
+}
+
+/**
  * Refresca la sesión de WhatsApp Web antes de iniciar un nuevo ciclo.
  * Recarga la página y re-inyecta los scripts para garantizar tokens MMS limpios,
  * reconexión de sockets y prevenir errores de encolado tras el período de descanso.
@@ -425,32 +501,7 @@ async function refrescarSesionParaNuevoCiclo(client, ciclo) {
     console.log(`[${getTimestamp()}] Flasheando caché y sockets para asegurar entrega inmediata de mensajes.`);
     console.log(`======================================================\n`);
 
-    try {
-        await conTimeout(
-            client.pupPage.reload({ waitUntil: 'load' }),
-            45000,
-            'Timeout al recargar página de WhatsApp Web'
-        );
-    } catch (eReload) {
-        console.warn(`[${getTimestamp()}] [AVISO] Recarga de página demoró más de 45s...`);
-    }
-
-    // Esperar a que WhatsApp Web cargue e indexe WWebJS
-    for (let w = 0; w < 20; w++) {
-        try {
-            const listo = await conTimeout(
-                client.pupPage.evaluate(() => typeof window.WWebJS !== 'undefined'),
-                2000
-            );
-            if (listo) break;
-        } catch (eW) {}
-        await sleep(1000);
-    }
-
-    // Espera de estabilización de 15 segundos tras la recarga para que WhatsApp indexe chats
-    console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Esperando 15 segundos de estabilización tras recarga...`);
-    await sleep(15000);
-    console.log(`[${getTimestamp()}] [OK] Sesión renovada y 100% activa para el Ciclo ${ciclo}.\n`);
+    await asegurarSesionSaludable(client, true);
 }
 
 /**
@@ -549,6 +600,9 @@ async function ejecutarCiclos(client) {
             console.log(`ID: ${grupo.id}`);
 
             try {
+                // Asegurar que la sesión esté viva y los sockets estabilizados antes de cada grupo
+                await asegurarSesionSaludable(client);
+
                 // 1. Verificación rápida de permisos de escritura en el grupo
                 const permiso = await verificarPermisoGrupoLigero(client, grupo.id, myWid);
 
@@ -605,6 +659,10 @@ async function ejecutarCiclos(client) {
                 let enviadoExitoso = false;
                 for (let intento = 1; intento <= 2; intento++) {
                     try {
+                        if (intento === 2) {
+                            await asegurarSesionSaludable(client, true);
+                        }
+
                         await conTimeout(
                             client.sendMessage(grupo.id, mediaActual, {
                                 caption: textoActual,
@@ -616,9 +674,16 @@ async function ejecutarCiclos(client) {
                         enviadoExitoso = true;
                         break;
                     } catch (eSend) {
-                        if (intento === 1 && /execution context|navigat/i.test(eSend.message)) {
-                            console.log(`[${getTimestamp()}] [REINTENTO] Contexto de navegación restablecido, reintentando envío...`);
-                            await sleep(2000);
+                        const errMsg = (eSend && eSend.message) ? eSend.message : String(eSend);
+                        const esFalloSesion = /detached Frame|execution context|navigat|reading 'getChat'|Target closed|^t$|No se pudo encolar/i.test(errMsg);
+
+                        if (intento === 1 && esFalloSesion) {
+                            console.log(`[${getTimestamp()}] [RECUPERACIÓN] Interrupción de sesión detectada (${errMsg}). Re-estabilizando WhatsApp Web para reintentar...`);
+                            await asegurarSesionSaludable(client, true);
+                            // Regenerar media fresca para el reintento
+                            const imgSel = obtenerImagenAlternada(imagenes, i);
+                            nombreImagenActual = path.basename(imgSel);
+                            mediaActual = crearMediaParaEnvio(imgSel, `${ciclo}_${i}`);
                             continue;
                         }
                         throw eSend;
@@ -666,20 +731,30 @@ async function ejecutarCiclos(client) {
                 await aplicarDescansoEspecial(contadorEnviados, grupos.length, siguienteGrupo);
 
             } catch (err) {
+                const errMsg = (err && err.message) ? err.message : String(err);
                 // Detectar si fue error de permisos / solo administradores
-                if (/read.?only|announce|admin|permission|not-authorized/i.test(err.message)) {
+                if (/read.?only|announce|admin|permission|not-authorized/i.test(errMsg)) {
                     contadorSoloAdmins++;
                     console.log(`[${getTimestamp()}] [SOLO ADMINS] Omitido: Grupo restringido a administradores.`);
                 } else {
                     contadorErrores++;
-                    console.error(`[${getTimestamp()}] [ERROR ENVÍO] Falló la entrega:`, err.message);
-                    registrarError(`Error de envío al grupo ${grupo.id} (${grupo.nombre}) en ciclo ${ciclo}: ${err.message}`, err.stack, 'Continuar con el siguiente grupo', 'Registrado');
+                    console.error(`[${getTimestamp()}] [ERROR ENVÍO] Falló la entrega:`, errMsg);
+                    registrarError(`Error de envío al grupo ${grupo.id} (${grupo.nombre}) en ciclo ${ciclo}: ${errMsg}`, err.stack, 'Continuar con el siguiente grupo', 'Registrado');
                 }
                 console.log(`======================================================\n`);
 
                 mediaActual = null;
                 textoActual = null;
                 nombreImagenActual = null;
+
+                // Si el fallo fue por desconexión o corrupción de sesión (como 't' o 'detached Frame'),
+                // restaurar la sesión INMEDIATAMENTE para que el siguiente grupo no falle en cadena
+                if (/detached Frame|execution context|navigat|^t$|Target closed|No se pudo encolar/i.test(errMsg)) {
+                    console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Restaurando sesión para garantizar entrega en el siguiente grupo...`);
+                    try {
+                        await asegurarSesionSaludable(client, true);
+                    } catch (eRec) { }
+                }
 
                 // Si hay siguiente grupo, mantener SIEMPRE la pausa de seguridad (10 a 15s) para no disparar ráfagas
                 if (siguienteGrupo) {
@@ -757,5 +832,6 @@ module.exports = {
     obtenerImagenAleatoria,
     obtenerImagenAlternada,
     guardarEstado,
-    cargarEstado
+    cargarEstado,
+    asegurarSesionSaludable
 };
