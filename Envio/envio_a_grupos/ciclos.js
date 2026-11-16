@@ -168,7 +168,7 @@ function cargarTextos() {
     );
 
     if (archivos.length === 0) {
-        throw new Error(`No se encontraron archivos .txt en la carpeta textos/. Por favor coloca los 20 archivos de texto.`);
+        throw new Error(`No se encontraron archivos .txt en la carpeta textos/. Por favor coloca los archivos de texto a difundir.`);
     }
 
     const textos = [];
