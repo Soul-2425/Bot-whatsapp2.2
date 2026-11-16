@@ -393,23 +393,81 @@ async function pausaInterGrupoConPreparacion({
 }
 
 /**
- * Aplica descanso especial estricto cada 25 grupos enviados:
- * - Cada 25 grupos: descanso de 30 segundos
- * @param {number} enviados Cantidad de grupos enviados exitosamente
- * @param {number} totalGrupos Total de grupos en la lista
- * @param {Object|null} siguienteGrupo Próximo grupo a procesar
+ * Descanso especial anti-baneos estricto cada 25 grupos procesados en la secuencia (25, 50, 75, 100, 125, 150...):
+ * Se ejecuta infaliblemente cada 25 grupos sin importar si fueron enviados, omitidos por solo admins o con error.
+ * Durante esta pausa de 30 segundos:
+ * 1. Se vacía la memoria y la caché del navegador Chromium (window.gc).
+ * 2. Se enfrían los sockets de WhatsApp Web y los canales de subida multimedia MMS.
+ * 3. Se reactiva la presencia online para renovar los tokens MMS y de sesión con el servidor.
+ * 4. Se pre-sincroniza en memoria el siguiente grupo de la lista.
+ * @param {Object} params Parámetros de ejecución
  */
-async function aplicarDescansoEspecial(enviados, totalGrupos, siguienteGrupo) {
-    if (!siguienteGrupo || enviados <= 0) return;
+async function aplicarDescansoHito25({ client, indiceProcesado, totalGrupos, siguienteGrupo }) {
+    if (!siguienteGrupo || indiceProcesado <= 0) return;
 
-    if (enviados % 25 === 0) {
-        const duracionMs = 30000; // 30 segundos exactos
-        console.log(`\n======================================================`);
-        console.log(`[${getTimestamp()}] [DESCANSO DE SEGURIDAD] Lote de 25 grupos completado (${enviados}/${totalGrupos})...`);
-        console.log(`[${getTimestamp()}] Pausa de enfriamiento de 30 segundos para proteger la reputación de la cuenta...`);
-        console.log(`======================================================\n`);
-        await sleep(duracionMs);
+    const tInicio = Date.now();
+    const duracionMs = 30000; // 30 segundos exactos
+
+    console.log(`\n======================================================`);
+    console.log(`[${getTimestamp()}] [HITO DE SEGURIDAD] Hito de 25 grupos alcanzado (Grupo ${indiceProcesado}/${totalGrupos})...`);
+    console.log(`[${getTimestamp()}] Pausa de enfriamiento de 30 segundos: liberando caché, estabilizando sockets y sincronizando...`);
+
+    // 1. Forzar recolección de basura y liberar memoria en Chromium
+    try {
+        await conTimeout(
+            client.pupPage.evaluate(() => {
+                try {
+                    if (window.gc) window.gc();
+                } catch (eGc) { }
+            }),
+            4000,
+            'Timeout en GC de hito'
+        );
+        console.log(`[${getTimestamp()}] [HITO LIMPIEZA] Caché y memoria de Chromium liberadas.`);
+    } catch (e) { }
+
+    // 2. Renovar presencia y estabilizar sockets
+    try {
+        await client.sendPresenceAvailable();
+        await asegurarSesionSaludable(client);
+        console.log(`[${getTimestamp()}] [HITO SOCKETS] Sockets y presencia con WhatsApp Web estabilizados.`);
+    } catch (e) { }
+
+    // 3. Pre-sincronizar el siguiente grupo por su ID
+    if (siguienteGrupo) {
+        try {
+            await conTimeout(
+                client.pupPage.evaluate(async (id) => {
+                    try {
+                        const wid = window.require('WAWebWidFactory').createWid(id);
+                        let chat = window.require('WAWebCollections').Chat.get(wid);
+                        if (!chat && window.require('WAWebFindChatAction')) {
+                            const res = await window.require('WAWebFindChatAction').findOrCreateLatestChat(wid);
+                            chat = res?.chat || res;
+                        }
+                        const GroupCol = window.require('WAWebCollections').GroupMetadata || window.require('WAWebCollections').WAWebGroupMetadataCollection;
+                        if (GroupCol && typeof GroupCol.find === 'function') {
+                            const meta = await GroupCol.find(wid);
+                            if (meta && chat) chat.groupMetadata = meta;
+                        }
+                    } catch (e) { }
+                }, siguienteGrupo.id),
+                6000,
+                'Timeout en precalentamiento de hito'
+            );
+            console.log(`[${getTimestamp()}] [HITO SINCRONIZACIÓN] Siguiente grupo pre-sincronizado: "${siguienteGrupo.nombre}" (${siguienteGrupo.id})`);
+        } catch (e) { }
     }
+
+    // 4. Completar exactamente los 30 segundos
+    const transcurrido = Date.now() - tInicio;
+    const restante = duracionMs - transcurrido;
+    if (restante > 0) {
+        await sleep(restante);
+    }
+
+    console.log(`[${getTimestamp()}] [HITO COMPLETADO] Enfriamiento de 30s finalizado. Reanudando envíos...`);
+    console.log(`======================================================\n`);
 }
 
 /**
@@ -432,7 +490,7 @@ async function asegurarSesionSaludable(client) {
         if (!tieneWWebJS) {
             // Re-inyectar Utils directamente en memoria sin recargar la página
             const { LoadUtils } = require('../../node_modules/whatsapp-web.js/src/util/Injected/Utils');
-            await client.pupPage.evaluate(LoadUtils).catch(() => {});
+            await client.pupPage.evaluate(LoadUtils).catch(() => { });
         }
 
         // 2. Comprobar socket y reconectar suavemente si se suspendió durante el descanso
@@ -442,8 +500,8 @@ async function asegurarSesionSaludable(client) {
                 if (s && s.state !== 'CONNECTED' && typeof s.reconnect === 'function') {
                     s.reconnect();
                 }
-            } catch (e) {}
-        }).catch(() => {});
+            } catch (e) { }
+        }).catch(() => { });
 
     } catch (e) {
         // Manejo silencioso: no interrumpir el flujo ni recargar la página
@@ -466,7 +524,7 @@ async function refrescarSesionParaNuevoCiclo(client, ciclo) {
 
     try {
         await client.sendPresenceAvailable();
-    } catch (e) {}
+    } catch (e) { }
 
     await sleep(2000);
 }
@@ -561,6 +619,7 @@ async function ejecutarCiclos(client) {
             const grupo = grupos[i];
             const progreso = `[${i + 1}/${grupos.length}]`;
             const siguienteGrupo = (i + 1 < grupos.length) ? grupos[i + 1] : null;
+            const indiceActual = i + 1;
 
             console.log(`\n======================================================`);
             console.log(`[${getTimestamp()}] GRUPO ${progreso}: "${grupo.nombre}"`);
@@ -580,14 +639,37 @@ async function ejecutarCiclos(client) {
                         contadorSoloAdmins++;
                         console.log(`[${getTimestamp()}] [SOLO ADMINS] Omitido: Solo administradores pueden enviar mensajes.`);
                     }
-                    console.log(`\n======================================================\n`);
+                    console.log(`======================================================\n`);
 
                     mediaActual = null;
                     textoActual = null;
                     nombreImagenActual = null;
 
-                    // Salto rápido de 1 segundo sin pausas largas innecesarias
-                    await sleep(1000);
+                    // Si alcanzamos hito de 25 grupos (25, 50, 75, 100...) en grupo omitido
+                    if (indiceActual % 25 === 0 && siguienteGrupo) {
+                        await aplicarDescansoHito25({
+                            client,
+                            indiceProcesado: indiceActual,
+                            totalGrupos: grupos.length,
+                            siguienteGrupo
+                        });
+                        const prep = await pausaInterGrupoConPreparacion({
+                            client,
+                            siguienteGrupo,
+                            imagenes,
+                            textos,
+                            ciclo,
+                            siguienteIndice: i + 1,
+                            minMs: 2000,
+                            maxMs: 3000
+                        });
+                        textoActual = prep.proximoTexto;
+                        mediaActual = prep.proximaMedia;
+                        nombreImagenActual = prep.proximoNombreImagen;
+                    } else {
+                        // Salto rápido de 1 segundo si no es hito
+                        await sleep(1000);
+                    }
                     continue;
                 }
 
@@ -643,16 +725,19 @@ async function ejecutarCiclos(client) {
                         break;
                     } catch (eSend) {
                         const errMsg = (eSend && eSend.message) ? eSend.message : String(eSend);
-                        const esFalloSesion = /detached Frame|execution context|navigat|reading 'getChat'|Target closed|^t$|No se pudo encolar/i.test(errMsg);
+                        const esFalloSesion = /detached Frame|execution context|navigat|reading 'getChat'|Target closed|^t$|No se pudo encolar|upload failed|media entry/i.test(errMsg);
 
                         if (intento === 1 && esFalloSesion) {
-                            console.log(`[${getTimestamp()}] [RECUPERACIÓN] Interrupción de sesión detectada (${errMsg}). Re-estabilizando WhatsApp Web para reintentar...`);
+                            console.log(`[${getTimestamp()}] [RECUPERACIÓN MMS/SOCKET] Interrupción detectada (${errMsg}). Enfriando sockets 6s y re-estabilizando WhatsApp Web...`);
+                            await sleep(6000);
+                            try {
+                                await client.sendPresenceAvailable();
+                            } catch (eP) { }
                             await asegurarSesionSaludable(client);
-                            await sleep(2000);
                             // Regenerar media fresca para el reintento
                             const imgSel = obtenerImagenAlternada(imagenes, i);
                             nombreImagenActual = path.basename(imgSel);
-                            mediaActual = crearMediaParaEnvio(imgSel, `${ciclo}_${i}`);
+                            mediaActual = crearMediaParaEnvio(imgSel, `${ciclo}_${i}_retry`);
                             continue;
                         }
                         throw eSend;
@@ -696,8 +781,15 @@ async function ejecutarCiclos(client) {
                 }
                 console.log(`======================================================\n`);
 
-                // 7. Descanso especial anti-baneos estricto cada 25 grupos enviados
-                await aplicarDescansoEspecial(contadorEnviados, grupos.length, siguienteGrupo);
+                // 7. Descanso especial anti-baneos estricto cada 25 grupos procesados (25, 50, 75, 100, 125, 150, 175...)
+                if (indiceActual % 25 === 0 && siguienteGrupo) {
+                    await aplicarDescansoHito25({
+                        client,
+                        indiceProcesado: indiceActual,
+                        totalGrupos: grupos.length,
+                        siguienteGrupo
+                    });
+                }
 
             } catch (err) {
                 const errMsg = (err && err.message) ? err.message : String(err);
@@ -716,10 +808,12 @@ async function ejecutarCiclos(client) {
                 textoActual = null;
                 nombreImagenActual = null;
 
-                // Si el fallo fue por desconexión o sockets en reposo, asegurar conexión en caliente
-                if (/detached Frame|execution context|navigat|^t$|Target closed|No se pudo encolar/i.test(errMsg)) {
-                    console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Asegurando conexión para el siguiente grupo...`);
+                // Si el fallo fue por desconexión o problemas de MMS/sockets, enfriar y asegurar conexión
+                if (/detached Frame|execution context|navigat|^t$|Target closed|No se pudo encolar|upload failed|media entry/i.test(errMsg)) {
+                    console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Enfriando conexión MMS y reactivando presencia para el siguiente grupo...`);
                     try {
+                        await sleep(5000);
+                        await client.sendPresenceAvailable();
                         await asegurarSesionSaludable(client);
                     } catch (eRec) { }
                 }
@@ -739,6 +833,16 @@ async function ejecutarCiclos(client) {
                     textoActual = prep.proximoTexto;
                     mediaActual = prep.proximaMedia;
                     nombreImagenActual = prep.proximoNombreImagen;
+                }
+
+                // 7. Descanso especial anti-baneos estricto cada 25 grupos procesados (25, 50, 75, 100, 125, 150, 175...)
+                if (indiceActual % 25 === 0 && siguienteGrupo) {
+                    await aplicarDescansoHito25({
+                        client,
+                        indiceProcesado: indiceActual,
+                        totalGrupos: grupos.length,
+                        siguienteGrupo
+                    });
                 }
             }
         }

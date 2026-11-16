@@ -809,11 +809,6 @@ exports.LoadUtils = () => {
             mediaObject.consolidate(mediaData.toJSON());
         }
 
-        try {
-            if (mediaData.mediaBlob && typeof mediaData.mediaBlob.autorelease === 'function') {
-                mediaData.mediaBlob.autorelease();
-            }
-        } catch (eAuto) {}
         const shouldUseMediaCache = window
             .require('WAWebMediaDataUtils')
             .shouldUseMediaCache(
@@ -841,13 +836,27 @@ exports.LoadUtils = () => {
         const { uploadMedia, uploadUnencryptedMedia } = window.require(
             'WAWebMediaMmsV4Upload',
         );
-        const uploadedMedia = !sendToChannel
-            ? await uploadMedia(dataToUpload)
-            : await uploadUnencryptedMedia(dataToUpload);
+        let uploadedMedia = null;
+        let lastUploadError = null;
+        for (let mmsTry = 1; mmsTry <= 2; mmsTry++) {
+            try {
+                uploadedMedia = !sendToChannel
+                    ? await uploadMedia(dataToUpload)
+                    : await uploadUnencryptedMedia(dataToUpload);
+                if (uploadedMedia && uploadedMedia.mediaEntry) {
+                    break;
+                }
+            } catch (errUpload) {
+                lastUploadError = errUpload;
+                if (mmsTry < 2) {
+                    await new Promise(res => setTimeout(res, 2500));
+                }
+            }
+        }
 
-        const mediaEntry = uploadedMedia.mediaEntry;
+        const mediaEntry = uploadedMedia ? uploadedMedia.mediaEntry : null;
         if (!mediaEntry) {
-            throw new Error('upload failed: media entry was not created');
+            throw (lastUploadError || new Error('upload failed: media entry was not created'));
         }
 
         mediaData.set({
