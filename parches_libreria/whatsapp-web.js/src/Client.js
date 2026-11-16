@@ -1655,6 +1655,12 @@ class Client extends EventEmitter {
             );
         }
 
+        // Auto-curación defensiva de WWebJS antes de acceder a getChat
+        const hasWWebJS = await this.pupPage.evaluate(() => typeof window.WWebJS !== 'undefined' && typeof window.WWebJS.getChat === 'function').catch(() => false);
+        if (!hasWWebJS) {
+            await this.pupPage.evaluate(LoadUtils).catch(() => {});
+        }
+
         const sentMsg = await this.pupPage.evaluate(
             async (chatId, content, options, sendSeen) => {
                 const chat = await window.WWebJS.getChat(chatId, {

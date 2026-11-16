@@ -414,94 +414,61 @@ async function aplicarDescansoEspecial(enviados, totalGrupos, siguienteGrupo) {
 
 /**
  * Verifica y asegura que la sesión de WhatsApp Web esté viva y lista para enviar.
- * Si el contexto se destruyó, el frame se desprendió, WhatsApp Web rebotó o se produjo error 't',
- * recarga la página y espera la estabilización completa de IndexedDB y tokens MMS.
+ * Re-inyecta WWebJS en caliente si faltara y reactiva el socket si estuvo en reposo,
+ * sin destruir el contexto de navegación ni recargar la página.
  * @param {Client} client Instancia del cliente WhatsApp Web
- * @param {boolean} forzar Si se debe forzar la recarga inmediata de la sesión
  */
-async function asegurarSesionSaludable(client, forzar = false) {
-    let saludable = false;
-    if (!forzar) {
-        try {
-            if (!client.pupPage || client.pupPage.isClosed()) {
-                saludable = false;
-            } else {
-                saludable = await conTimeout(
-                    client.pupPage.evaluate(() => {
-                        try {
-                            const WWebJS = window.WWebJS;
-                            const Socket = window.require && window.require('WAWebSocketModel')?.Socket;
-                            return Boolean(WWebJS && typeof WWebJS.sendMessage === 'function' && Socket?.state === 'CONNECTED');
-                        } catch (e) {
-                            return false;
-                        }
-                    }),
-                    4000
-                );
-            }
-        } catch (e) {
-            saludable = false;
-        }
+async function asegurarSesionSaludable(client) {
+    if (!client || !client.pupPage || client.pupPage.isClosed()) {
+        return;
     }
 
-    if (!saludable || forzar) {
-        console.log(`\n======================================================`);
-        console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Sesión desincronizada o frame desprendido.`);
-        console.log(`[${getTimestamp()}] Restaurando conexión limpia de WhatsApp Web...`);
-        console.log(`======================================================\n`);
+    try {
+        // 1. Verificar si WWebJS sigue presente en memoria del navegador
+        const tieneWWebJS = await client.pupPage.evaluate(() => {
+            return typeof window.WWebJS !== 'undefined' && typeof window.WWebJS.sendMessage === 'function';
+        }).catch(() => false);
 
-        try {
-            await conTimeout(
-                client.pupPage.reload({ waitUntil: 'load' }),
-                45000,
-                'Timeout al recargar página de WhatsApp Web'
-            );
-        } catch (eRel) {
-            console.warn(`[${getTimestamp()}] [AVISO] Recarga de página demoró más de 45s...`);
+        if (!tieneWWebJS) {
+            // Re-inyectar Utils directamente en memoria sin recargar la página
+            const { LoadUtils } = require('../../node_modules/whatsapp-web.js/src/util/Injected/Utils');
+            await client.pupPage.evaluate(LoadUtils).catch(() => {});
         }
 
-        // Esperar a que WhatsApp Web inyecte WWebJS
-        for (let w = 0; w < 30; w++) {
+        // 2. Comprobar socket y reconectar suavemente si se suspendió durante el descanso
+        await client.pupPage.evaluate(() => {
             try {
-                const listo = await conTimeout(
-                    client.pupPage.evaluate(() => typeof window.WWebJS !== 'undefined'),
-                    2000
-                );
-                if (listo) break;
-            } catch (eW) {}
-            await sleep(1000);
-        }
+                const s = window.require && window.require('WAWebSocketModel')?.Socket;
+                if (s && s.state !== 'CONNECTED' && typeof s.reconnect === 'function') {
+                    s.reconnect();
+                }
+            } catch (e) {}
+        }).catch(() => {});
 
-        // Espera de estabilización de 15 segundos para que WhatsApp indexe chats y reconecte MMS
-        console.log(`[${getTimestamp()}] [SINCRONIZACIÓN] Esperando 15 segundos para estabilizar base de datos y MMS...`);
-        await sleep(15000);
-        client._ultimaAutenticacion = Date.now();
-        console.log(`[${getTimestamp()}] [OK] Sesión 100% restablecida y lista para reanudar envíos.\n`);
-    } else {
-        // Si WhatsApp Web se resincronizó internamente hace menos de 15s, esperar el resto para evitar 't' en MMS
-        const tiempoDesdeAuth = Date.now() - (client._ultimaAutenticacion || 0);
-        if (tiempoDesdeAuth < 15000) {
-            const esperaMs = 15000 - tiempoDesdeAuth;
-            console.log(`[${getTimestamp()}] [ESTABILIZACIÓN] WhatsApp Web resincronizado recientemente. Esperando ${Math.ceil(esperaMs / 1000)}s para asegurar conexión MMS...`);
-            await sleep(esperaMs);
-        }
+    } catch (e) {
+        // Manejo silencioso: no interrumpir el flujo ni recargar la página
     }
 }
 
 /**
- * Refresca la sesión de WhatsApp Web antes de iniciar un nuevo ciclo.
- * Recarga la página y re-inyecta los scripts para garantizar tokens MMS limpios,
- * reconexión de sockets y prevenir errores de encolado tras el período de descanso.
+ * Prepara la sesión de WhatsApp Web antes de iniciar un nuevo ciclo.
+ * Despierta los sockets, renueva la presencia online y asegura que WWebJS esté listo
+ * sin destruir la sesión ni provocar navegación.
  * @param {Client} client Instancia del cliente WhatsApp Web
  * @param {number} ciclo Número del nuevo ciclo
  */
 async function refrescarSesionParaNuevoCiclo(client, ciclo) {
     console.log(`\n======================================================`);
-    console.log(`[${getTimestamp()}] [REFRESCO DE CICLO] Renovando conexión de WhatsApp Web para el Ciclo ${ciclo}...`);
-    console.log(`[${getTimestamp()}] Flasheando caché y sockets para asegurar entrega inmediata de mensajes.`);
+    console.log(`[${getTimestamp()}] [PREPARANDO CICLO ${ciclo}] Reactivando sockets y presencia para el Ciclo ${ciclo}...`);
     console.log(`======================================================\n`);
 
-    await asegurarSesionSaludable(client, true);
+    await asegurarSesionSaludable(client);
+
+    try {
+        await client.sendPresenceAvailable();
+    } catch (e) {}
+
+    await sleep(2000);
 }
 
 /**
@@ -660,7 +627,8 @@ async function ejecutarCiclos(client) {
                 for (let intento = 1; intento <= 2; intento++) {
                     try {
                         if (intento === 2) {
-                            await asegurarSesionSaludable(client, true);
+                            await asegurarSesionSaludable(client);
+                            await sleep(1500);
                         }
 
                         await conTimeout(
@@ -679,7 +647,8 @@ async function ejecutarCiclos(client) {
 
                         if (intento === 1 && esFalloSesion) {
                             console.log(`[${getTimestamp()}] [RECUPERACIÓN] Interrupción de sesión detectada (${errMsg}). Re-estabilizando WhatsApp Web para reintentar...`);
-                            await asegurarSesionSaludable(client, true);
+                            await asegurarSesionSaludable(client);
+                            await sleep(2000);
                             // Regenerar media fresca para el reintento
                             const imgSel = obtenerImagenAlternada(imagenes, i);
                             nombreImagenActual = path.basename(imgSel);
@@ -747,12 +716,11 @@ async function ejecutarCiclos(client) {
                 textoActual = null;
                 nombreImagenActual = null;
 
-                // Si el fallo fue por desconexión o corrupción de sesión (como 't' o 'detached Frame'),
-                // restaurar la sesión INMEDIATAMENTE para que el siguiente grupo no falle en cadena
+                // Si el fallo fue por desconexión o sockets en reposo, asegurar conexión en caliente
                 if (/detached Frame|execution context|navigat|^t$|Target closed|No se pudo encolar/i.test(errMsg)) {
-                    console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Restaurando sesión para garantizar entrega en el siguiente grupo...`);
+                    console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Asegurando conexión para el siguiente grupo...`);
                     try {
-                        await asegurarSesionSaludable(client, true);
+                        await asegurarSesionSaludable(client);
                     } catch (eRec) { }
                 }
 
