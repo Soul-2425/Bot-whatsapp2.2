@@ -7,6 +7,9 @@ exports.ExposeAuthStore = async () => {
             if (window.require && window.require('WAWebSocketModel')?.Socket && window.require('WAWebConnModel')?.Conn) {
                 break;
             }
+            if (document.querySelector('div[data-ref]') || document.querySelector('canvas[aria-label]') || window.location.href.includes('/login')) {
+                break;
+            }
         } catch (e) {}
         await new Promise(r => setTimeout(r, 250));
     }
