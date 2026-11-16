@@ -148,7 +148,7 @@ class Client extends EventEmitter {
                 try {
                     const sm = window.require ? window.require('WAWebSocketModel') : null;
                     if (sm && sm.Socket) break;
-                } catch (e) {}
+                } catch (e) { }
                 await new Promise(r => setTimeout(r, 500));
             }
             const SocketModel = window.require ? window.require('WAWebSocketModel') : null;
@@ -165,7 +165,7 @@ class Client extends EventEmitter {
                         try {
                             const sm = window.require ? window.require('WAWebSocketModel') : null;
                             if (sm?.Socket?.off) sm.Socket.off('change:state', waitTillInit);
-                        } catch (e) {}
+                        } catch (e) { }
                         r();
                     }, 20000);
 
@@ -179,7 +179,7 @@ class Client extends EventEmitter {
                             try {
                                 const sm = window.require ? window.require('WAWebSocketModel') : null;
                                 if (sm?.Socket?.off) sm.Socket.off('change:state', waitTillInit);
-                            } catch (e) {}
+                            } catch (e) { }
                             r();
                         }
                     }
@@ -348,7 +348,10 @@ class Client extends EventEmitter {
                  * Emitted when authentication is successful
                  * @event Client#authenticated
                  */
-                this.emit(Events.AUTHENTICATED, authEventPayload);
+                if (!this._hasEmittedAuthenticated) {
+                    this._hasEmittedAuthenticated = true;
+                    this.emit(Events.AUTHENTICATED, authEventPayload);
+                }
 
                 const injected = await this.pupPage.evaluate(async () => {
                     return typeof window.WWebJS !== 'undefined';
@@ -418,8 +421,11 @@ class Client extends EventEmitter {
                  * Emitted when the client has initialized and is ready to receive messages.
                  * @event Client#ready
                  */
-                this.emit(Events.READY);
-                this.authStrategy.afterAuthReady();
+                if (!this._hasEmittedReady) {
+                    this._hasEmittedReady = true;
+                    this.emit(Events.READY);
+                    this.authStrategy.afterAuthReady();
+                }
             },
         );
         let lastPercent = null;
@@ -443,7 +449,11 @@ class Client extends EventEmitter {
                     .catch((_) => _);
             },
         );
-        await this.pupPage.evaluate(() => {
+        await this.pupPage.evaluate(async () => {
+            for (let i = 0; i < 20; i++) {
+                if (window.require && window.require('WAWebSocketModel')?.Socket) break;
+                await new Promise(r => setTimeout(r, 200));
+            }
             const socketModel = window.require ? window.require('WAWebSocketModel') : null;
             if (socketModel && socketModel.Socket) {
                 socketModel.Socket.on('change:state', (_AppState, state) => {
@@ -452,6 +462,9 @@ class Client extends EventEmitter {
                 socketModel.Socket.on('change:hasSynced', () => {
                     window.onAppStateHasSyncedEvent();
                 });
+                if (socketModel.Socket.hasSynced) {
+                    await window.onAppStateHasSyncedEvent();
+                }
             }
             const Cmd = window.require ? window.require('WAWebCmd')?.Cmd : null;
             if (Cmd && typeof Cmd.on === 'function') {
@@ -539,6 +552,17 @@ class Client extends EventEmitter {
 
         await this.inject();
 
+        // Si la sesión ya estaba sincronizada o conectada en segundo plano, asegurar disparo del evento
+        try {
+            const yaConectado = await this.pupPage.evaluate(() => {
+                const s = window.require ? window.require('WAWebSocketModel')?.Socket : null;
+                return Boolean(s && (s.hasSynced || s.state === 'CONNECTED'));
+            });
+            if (yaConectado && typeof window.onAppStateHasSyncedEvent === 'function') {
+                await this.pupPage.evaluate(() => window.onAppStateHasSyncedEvent());
+            }
+        } catch (eSync) {}
+
         this.pupPage.on('framenavigated', async (frame) => {
             if (frame.url().includes('post_logout=1') || this.lastLoggedOut) {
                 this.emit(Events.DISCONNECTED, 'LOGOUT');
@@ -546,6 +570,8 @@ class Client extends EventEmitter {
                 await this.authStrategy.beforeBrowserInitialized();
                 await this.authStrategy.afterBrowserInitialized();
                 this.lastLoggedOut = false;
+                this._hasEmittedAuthenticated = false;
+                this._hasEmittedReady = false;
             }
             await this.inject();
         });
@@ -1446,8 +1472,8 @@ class Client extends EventEmitter {
                 content instanceof Buttons,
                 content instanceof List,
                 Array.isArray(content) &&
-                    content.length > 0 &&
-                    content[0] instanceof Contact,
+                content.length > 0 &&
+                content[0] instanceof Contact,
             ].includes(true)
         ) {
             console.warn(
@@ -1468,8 +1494,8 @@ class Client extends EventEmitter {
                 content instanceof Buttons,
                 content instanceof List,
                 Array.isArray(content) &&
-                    content.length > 0 &&
-                    content[0] instanceof Contact,
+                content.length > 0 &&
+                content[0] instanceof Contact,
             ].includes(true)
         ) {
             console.warn(
@@ -1588,7 +1614,7 @@ class Client extends EventEmitter {
                 if (sendSeen) {
                     try {
                         await window.WWebJS.sendSeen(chatId);
-                    } catch (eSeen) {}
+                    } catch (eSeen) { }
                 }
 
                 const msg = await window.WWebJS.sendMessage(
@@ -1859,10 +1885,10 @@ class Client extends EventEmitter {
             return !pinnedMsgs.length
                 ? []
                 : await Promise.all(
-                      pinnedMsgs.map((msg) =>
-                          window.WWebJS.getMessageModel(msg),
-                      ),
-                  );
+                    pinnedMsgs.map((msg) =>
+                        window.WWebJS.getMessageModel(msg),
+                    ),
+                );
         }, chatId);
 
         return pinnedMsgs.map((msg) => new Message(this, msg));
@@ -2164,9 +2190,9 @@ class Client extends EventEmitter {
                         .Chat.find(chatId));
                 action === 'MUTE'
                     ? await chat.mute.mute({
-                          expiration: unmuteDateTs,
-                          sendDevice: true,
-                      })
+                        expiration: unmuteDateTs,
+                        sendDevice: true,
+                    })
                     : await chat.mute.unmute({ sendDevice: true });
                 return {
                     isMuted: chat.mute.expiration !== 0,
@@ -2450,9 +2476,9 @@ class Client extends EventEmitter {
                                 window
                                     .require('WAWebCollections')
                                     .Chat.get(participant.wid) ||
-                                    (await window
-                                        .require('WAWebCollections')
-                                        .Chat.find(participant.wid)),
+                                (await window
+                                    .require('WAWebCollections')
+                                    .Chat.find(participant.wid)),
                                 createGroupResult.wid._serialized,
                                 createGroupResult.subject,
                                 participant.invite_code,
@@ -2717,11 +2743,11 @@ class Client extends EventEmitter {
 
                 countryCodes =
                     countryCodes.length === 1 &&
-                    countryCodes[0] === currentRegion
+                        countryCodes[0] === currentRegion
                         ? countryCodes
                         : countryCodes.filter((code) =>
-                              Object.keys(countryCodesIso).includes(code),
-                          );
+                            Object.keys(countryCodesIso).includes(code),
+                        );
 
                 const viewTypeMapping = {
                     0: 'RECOMMENDED',
@@ -2760,12 +2786,12 @@ class Client extends EventEmitter {
 
                 return channels
                     ? await Promise.all(
-                          channels.map((channel) =>
-                              window.WWebJS.getChatModel(channel, {
-                                  isChannel: true,
-                              }),
-                          ),
-                      )
+                        channels.map((channel) =>
+                            window.WWebJS.getChatModel(channel, {
+                                isChannel: true,
+                            }),
+                        ),
+                    )
                     : [];
             },
             searchOptions,
