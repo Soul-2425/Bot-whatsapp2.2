@@ -840,9 +840,16 @@ exports.LoadUtils = () => {
         let lastUploadError = null;
         for (let mmsTry = 1; mmsTry <= 2; mmsTry++) {
             try {
-                uploadedMedia = !sendToChannel
-                    ? await uploadMedia(dataToUpload)
-                    : await uploadUnencryptedMedia(dataToUpload);
+                const uploadPromise = !sendToChannel
+                    ? uploadMedia(dataToUpload)
+                    : uploadUnencryptedMedia(dataToUpload);
+
+                let timerId;
+                const timeoutPromise = new Promise((_, reject) => {
+                    timerId = setTimeout(() => reject(new Error('MMS upload timeout')), 20000);
+                });
+
+                uploadedMedia = await Promise.race([uploadPromise, timeoutPromise]).finally(() => clearTimeout(timerId));
                 if (uploadedMedia && uploadedMedia.mediaEntry) {
                     break;
                 }

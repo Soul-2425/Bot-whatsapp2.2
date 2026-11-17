@@ -473,7 +473,7 @@ async function aplicarDescansoHito25({ client, indiceProcesado, totalGrupos, sig
 /**
  * Verifica y asegura que la sesión de WhatsApp Web esté viva y lista para enviar.
  * Re-inyecta WWebJS en caliente si faltara y reactiva el socket si estuvo en reposo,
- * sin destruir el contexto de navegación ni recargar la página.
+ * con timeouts estrictos para que NUNCA bloquee el proceso.
  * @param {Client} client Instancia del cliente WhatsApp Web
  */
 async function asegurarSesionSaludable(client) {
@@ -482,26 +482,38 @@ async function asegurarSesionSaludable(client) {
     }
 
     try {
-        // 1. Verificar si WWebJS sigue presente en memoria del navegador
-        const tieneWWebJS = await client.pupPage.evaluate(() => {
-            return typeof window.WWebJS !== 'undefined' && typeof window.WWebJS.sendMessage === 'function';
-        }).catch(() => false);
+        // 1. Verificar si WWebJS sigue presente en memoria del navegador (timeout defensivo de 4s)
+        const tieneWWebJS = await conTimeout(
+            client.pupPage.evaluate(() => {
+                return typeof window.WWebJS !== 'undefined' && typeof window.WWebJS.sendMessage === 'function';
+            }),
+            4000,
+            'Timeout al verificar WWebJS'
+        ).catch(() => false);
 
         if (!tieneWWebJS) {
             // Re-inyectar Utils directamente en memoria sin recargar la página
             const { LoadUtils } = require('../../node_modules/whatsapp-web.js/src/util/Injected/Utils');
-            await client.pupPage.evaluate(LoadUtils).catch(() => { });
+            await conTimeout(
+                client.pupPage.evaluate(LoadUtils),
+                5000,
+                'Timeout al inyectar Utils'
+            ).catch(() => { });
         }
 
         // 2. Comprobar socket y reconectar suavemente si se suspendió durante el descanso
-        await client.pupPage.evaluate(() => {
-            try {
-                const s = window.require && window.require('WAWebSocketModel')?.Socket;
-                if (s && s.state !== 'CONNECTED' && typeof s.reconnect === 'function') {
-                    s.reconnect();
-                }
-            } catch (e) { }
-        }).catch(() => { });
+        await conTimeout(
+            client.pupPage.evaluate(() => {
+                try {
+                    const s = window.require && window.require('WAWebSocketModel')?.Socket;
+                    if (s && s.state !== 'CONNECTED' && typeof s.reconnect === 'function') {
+                        s.reconnect();
+                    }
+                } catch (e) { }
+            }),
+            4000,
+            'Timeout al reconectar socket'
+        ).catch(() => { });
 
     } catch (e) {
         // Manejo silencioso: no interrumpir el flujo ni recargar la página
@@ -509,9 +521,9 @@ async function asegurarSesionSaludable(client) {
 }
 
 /**
- * Prepara la sesión de WhatsApp Web antes de iniciar un nuevo ciclo.
+ * Prepara la sesión de WhatsApp Web antes de iniciar un nuevo ciclo (Ciclo 2 en adelante).
  * Despierta los sockets, renueva la presencia online y asegura que WWebJS esté listo
- * sin destruir la sesión ni provocar navegación.
+ * sin destruir la sesión ni congelar el proceso.
  * @param {Client} client Instancia del cliente WhatsApp Web
  * @param {number} ciclo Número del nuevo ciclo
  */
@@ -520,12 +532,43 @@ async function refrescarSesionParaNuevoCiclo(client, ciclo) {
     console.log(`[${getTimestamp()}] [PREPARANDO CICLO ${ciclo}] Reactivando sockets y presencia para el Ciclo ${ciclo}...`);
     console.log(`======================================================\n`);
 
-    await asegurarSesionSaludable(client);
-
+    // 1. Limpieza de memoria y caché de Chromium antes de arrancar el ciclo
     try {
-        await client.sendPresenceAvailable();
+        await conTimeout(
+            client.pupPage.evaluate(() => {
+                try {
+                    if (window.gc) window.gc();
+                } catch (e) { }
+                try {
+                    const cache = window.require && window.require('WAWebMediaInMemoryBlobCache')?.InMemoryMediaBlobCache;
+                    if (cache && typeof cache.clear === 'function') cache.clear();
+                } catch (e) { }
+            }),
+            4000,
+            'Timeout en limpieza de ciclo'
+        ).catch(() => {});
     } catch (e) { }
 
+    // 2. Asegurar sesión saludable con timeouts defensivos
+    await asegurarSesionSaludable(client);
+
+    // 3. Reactivar presencia con timeout estricto de 4s (NUNCA bloquear el flujo)
+    try {
+        await conTimeout(
+            client.pupPage.evaluate(async () => {
+                try {
+                    const pa = window.require && window.require('WAWebPresenceChatAction');
+                    if (pa && typeof pa.sendPresenceAvailable === 'function') {
+                        await pa.sendPresenceAvailable();
+                    }
+                } catch (e) { }
+            }),
+            4000,
+            'Timeout en presencia de ciclo'
+        ).catch(() => {});
+    } catch (e) { }
+
+    console.log(`[${getTimestamp()}] [CICLO ${ciclo} LISTO] Sesión y sockets reactivados con éxito. Iniciando envíos...\n`);
     await sleep(2000);
 }
 
@@ -704,13 +747,98 @@ async function ejecutarCiclos(client) {
                 // 4. Informar estado previo de envío
                 console.log(`[${getTimestamp()}] [ENVIANDO] Transmitiendo imagen (${nombreImagenActual}) y texto aleatorio...`);
 
-                // 5. Enviar mensaje multimedia a través de WhatsApp Web (con 50s de timeout para grupos masivos)
+                // 5. Enviar mensaje multimedia a través de WhatsApp Web (con 35s de timeout para grupos masivos)
                 let enviadoExitoso = false;
                 for (let intento = 1; intento <= 2; intento++) {
                     try {
                         if (intento === 2) {
+                            // AUTO-RECUPERACIÓN COMPLETA ANTES DEL REINTENTO
+                            console.log(`[${getTimestamp()}] [RECUPERACIÓN COMPLETA] Ejecutando auto-recuperación profunda antes de reintentar: vaciando caché, optimizando memoria y re-sincronizando...`);
+
+                            // 1. Liberar memoria y limpiar cachés de blobs multimedia en Chromium
+                            try {
+                                await conTimeout(
+                                    client.pupPage.evaluate(() => {
+                                        try {
+                                            if (window.gc) window.gc();
+                                        } catch (e) { }
+                                        try {
+                                            const cache = window.require && window.require('WAWebMediaInMemoryBlobCache')?.InMemoryMediaBlobCache;
+                                            if (cache && typeof cache.clear === 'function') cache.clear();
+                                        } catch (e) { }
+                                    }),
+                                    4000,
+                                    'Timeout en GC de reintento'
+                                ).catch(() => {});
+                            } catch (e) { }
+
+                            // 2. Re-estabilizar y reconectar socket si se suspendió
+                            try {
+                                await conTimeout(
+                                    client.pupPage.evaluate(() => {
+                                        try {
+                                            const s = window.require && window.require('WAWebSocketModel')?.Socket;
+                                            if (s && s.state !== 'CONNECTED' && typeof s.reconnect === 'function') {
+                                                s.reconnect();
+                                            }
+                                        } catch (e) { }
+                                    }),
+                                    4000,
+                                    'Timeout en reconnect de socket'
+                                ).catch(() => {});
+                            } catch (e) { }
+
+                            // 3. Pausa de enfriamiento de 5 segundos para que los buffers y el servidor MMS se asienten
+                            await sleep(5000);
+
+                            // 4. Renovar presencia con timeout estricto de 4s (NUNCA congelar el proceso)
+                            try {
+                                await conTimeout(
+                                    client.pupPage.evaluate(async () => {
+                                        try {
+                                            const pa = window.require && window.require('WAWebPresenceChatAction');
+                                            if (pa && typeof pa.sendPresenceAvailable === 'function') {
+                                                await pa.sendPresenceAvailable();
+                                            }
+                                        } catch (e) { }
+                                    }),
+                                    4000,
+                                    'Timeout en presencia'
+                                ).catch(() => {});
+                            } catch (e) { }
+
+                            // 5. Re-asegurar inyección de WWebJS
                             await asegurarSesionSaludable(client);
-                            await sleep(1500);
+
+                            // 6. Re-sincronizar el grupo objetivo por su ID
+                            try {
+                                await conTimeout(
+                                    client.pupPage.evaluate(async (id) => {
+                                        try {
+                                            const wid = window.require('WAWebWidFactory').createWid(id);
+                                            let chat = window.require('WAWebCollections').Chat.get(wid);
+                                            if (!chat && window.require('WAWebFindChatAction')) {
+                                                const res = await window.require('WAWebFindChatAction').findOrCreateLatestChat(wid);
+                                                chat = res?.chat || res;
+                                            }
+                                            const GroupCol = window.require('WAWebCollections').GroupMetadata || window.require('WAWebCollections').WAWebGroupMetadataCollection;
+                                            if (GroupCol && typeof GroupCol.find === 'function') {
+                                                const meta = await GroupCol.find(wid);
+                                                if (meta && chat) chat.groupMetadata = meta;
+                                            }
+                                        } catch (e) { }
+                                    }, grupo.id),
+                                    6000,
+                                    'Timeout en re-sincronización de grupo'
+                                ).catch(() => {});
+                            } catch (e) { }
+
+                            // 7. Regenerar MessageMedia con identificador timestamped único para evitar colisión de hash en caché
+                            const imgSel = obtenerImagenAlternada(imagenes, i);
+                            nombreImagenActual = path.basename(imgSel);
+                            mediaActual = crearMediaParaEnvio(imgSel, `${ciclo}_${i}_reintento_${Date.now()}`);
+
+                            console.log(`[${getTimestamp()}] [REINTENTO LISTO] Memoria y sockets restablecidos. Reintentando transmisión a "${grupo.nombre}"...`);
                         }
 
                         await conTimeout(
@@ -718,26 +846,20 @@ async function ejecutarCiclos(client) {
                                 caption: textoActual,
                                 waitUntilMsgSent: false
                             }),
-                            50000,
-                            'No se pudo encolar el mensaje en WhatsApp Web en 50s'
+                            35000,
+                            'No se pudo encolar el mensaje en WhatsApp Web en 35s'
                         );
                         enviadoExitoso = true;
+                        if (intento > 1) {
+                            console.log(`[${getTimestamp()}] [ÉXITO EN REINTENTO] Mensaje e imagen entregados exitosamente tras la auto-recuperación.`);
+                        }
                         break;
                     } catch (eSend) {
                         const errMsg = (eSend && eSend.message) ? eSend.message : String(eSend);
-                        const esFalloSesion = /detached Frame|execution context|navigat|reading 'getChat'|Target closed|^t$|No se pudo encolar|upload failed|media entry/i.test(errMsg);
+                        const esFalloSesion = /detached Frame|execution context|navigat|reading 'getChat'|Target closed|^t$|No se pudo encolar|upload failed|media entry|timeout/i.test(errMsg);
 
                         if (intento === 1 && esFalloSesion) {
-                            console.log(`[${getTimestamp()}] [RECUPERACIÓN MMS/SOCKET] Interrupción detectada (${errMsg}). Enfriando sockets 6s y re-estabilizando WhatsApp Web...`);
-                            await sleep(6000);
-                            try {
-                                await client.sendPresenceAvailable();
-                            } catch (eP) { }
-                            await asegurarSesionSaludable(client);
-                            // Regenerar media fresca para el reintento
-                            const imgSel = obtenerImagenAlternada(imagenes, i);
-                            nombreImagenActual = path.basename(imgSel);
-                            mediaActual = crearMediaParaEnvio(imgSel, `${ciclo}_${i}_retry`);
+                            console.log(`[${getTimestamp()}] [AVISO REINTENTO] Interrupción en intento 1 (${errMsg}). Activando auto-recuperación profunda...`);
                             continue;
                         }
                         throw eSend;
@@ -809,11 +931,22 @@ async function ejecutarCiclos(client) {
                 nombreImagenActual = null;
 
                 // Si el fallo fue por desconexión o problemas de MMS/sockets, enfriar y asegurar conexión
-                if (/detached Frame|execution context|navigat|^t$|Target closed|No se pudo encolar|upload failed|media entry/i.test(errMsg)) {
+                if (/detached Frame|execution context|navigat|^t$|Target closed|No se pudo encolar|upload failed|media entry|timeout/i.test(errMsg)) {
                     console.log(`[${getTimestamp()}] [AUTO-RECUPERACIÓN] Enfriando conexión MMS y reactivando presencia para el siguiente grupo...`);
                     try {
                         await sleep(5000);
-                        await client.sendPresenceAvailable();
+                        await conTimeout(
+                            client.pupPage.evaluate(async () => {
+                                try {
+                                    const pa = window.require && window.require('WAWebPresenceChatAction');
+                                    if (pa && typeof pa.sendPresenceAvailable === 'function') {
+                                        await pa.sendPresenceAvailable();
+                                    }
+                                } catch (e) { }
+                            }),
+                            4000,
+                            'Timeout en presencia'
+                        ).catch(() => {});
                         await asegurarSesionSaludable(client);
                     } catch (eRec) { }
                 }
